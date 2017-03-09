@@ -1,11 +1,17 @@
 import os
-
+import random
 
 # DATA_PATH + 'set_num_l.txt'
 # DATA_PATH + 'set_num_r.txt'
 
 class DataMgr(object):
     def __init__(self, data_path, batch_size, use_bern, embedding_size):
+        print('Parameters of DataMgr:')
+        print('\tdata_path: %s' % data_path)
+        print('\tbatch_size: %d' % batch_size)
+        print('\tuse_bern: %s' % 'True' if use_bern else 'False')
+        print('\tembedding_size: %d' % embedding_size)
+
         self.use_bern = use_bern
         self.batch_size = batch_size
         self.embedding_size = embedding_size
@@ -60,14 +66,14 @@ class DataMgr(object):
     def get_relation_id(self, relation):
         return self._relation2id[relation]
 
-    def _load_trilet_train_data(self, train_data):
+    def _load_trilet_train_data(self, train_file):
         # load triplet data
         tail = {} # given a relation and head to get tail
         head = {} # given a relation and tail to get head
         # head_counter = {}
         # tail_counter = {}
         train_data = []
-        with open(train_data) as f:
+        with open(train_file) as f:
             for line in f:
                 h, r, t = line.split()
 
@@ -87,11 +93,18 @@ class DataMgr(object):
                 #     tail_counter[tid] = 0
 
                 if rid not in head:
-                    head[rid] = []
-                    tail[rid] = []
-                head[rid][tid].append(hid)
-                tail[rid][hid].append(tid)
-
+                    head[rid] = {}
+                    tail[rid] = {}
+                if tid not in head[rid]:
+                    head[rid][tid] = [hid]
+                else:
+                    head[rid][tid].append(hid)
+                if hid not in tail[rid]:
+                    tail[rid][hid] = [tid]
+                else:
+                    tail[rid][hid].append(tid)
+        self.num_batches = len(train_data) // self.batch_size
+        print('\tnum_batches %d' %self.num_batches)
         self._head = head
         self._tail = tail
         self.train_data = train_data
@@ -100,7 +113,11 @@ class DataMgr(object):
         # Compute probability (Bernoulli distributaion) of replacing head used in
         # constructing negative tuplet. See the following paper for details.
         # http://www.aaai.org/ocs/index.php/AAAI/AAAI14/paper/viewFile/8531/8546
-        prob_head = []
+        prob_head = [0.5 for _ in self.relation_id_set]
+        self._prob_head = prob_head
+        if not self.use_bern:
+            return
+
         for rid in self.relation_id_set:
             num_tails = 0
             num_heads = 0
@@ -111,8 +128,6 @@ class DataMgr(object):
             tph = num_tails / num_heads # average tail number per head for a relation
             hpt = num_heads / num_tails # average head number per tail for a relation
             prob_head[rid] = tph / (hpt + tph)
-
-        self._prob_head = prob_head
 
     def _load_entity_and_relation_embeddings(self, entity2vec_data, relation2vec_data):
         # load embeddings
@@ -130,7 +145,7 @@ class DataMgr(object):
         self.entity_embeddings = entity_embeddings
         self.relation_embeddings = relation_embeddings
 
-    def _load_sparse_index(slef, sparse_index_head_data, sparse_index_tail_data):
+    def _load_sparse_index(self, sparse_index_head_data, sparse_index_tail_data):
         n = self.embedding_size
         r = self.relation_num
 
@@ -138,7 +153,7 @@ class DataMgr(object):
         with open(sparse_index_head_data) as f:
             for line_num, line in enumerate(f):
                 indices = line.split()
-                rid = line_num / n
+                rid = line_num // n
                 row = line_num % n
                 # nozero_num = int(indices[0])
                 sparse_index_head[rid][row] = [int(i) for i in indices[1:]]
@@ -147,7 +162,7 @@ class DataMgr(object):
         with open(sparse_index_tail_data) as f:
             for line_num, line in enumerate(f):
                 indices = line.split()
-                rid = line_num / n
+                rid = line_num // n
                 row = line_num % n
                 # nozero_num = int(indices[0])
                 sparse_index_tail[rid][row] = [int(i) for i in indices[1:]]
@@ -155,14 +170,13 @@ class DataMgr(object):
         self.sparse_index_head = sparse_index_head
         self.sparse_index_tail = sparse_index_tail
 
-
-
     def get_batch(self):
         batch_data = []
         for _ in range(self.batch_size):
             pos_triplet = random.choice(self.train_data)
             neg_triplet = self._generate_negative_triplet(pos_triplet)
             batch_data.append( (pos_triplet, neg_triplet) )
+        return batch_data
 
     def _generate_negative_triplet(self, pos_triplet):
         hid, rid, tid =  pos_triplet
@@ -183,3 +197,9 @@ class DataMgr(object):
             while n_tid in self._tail[rid][hid]:
                 n_tid = random.choice(self.entity_id_set)
         return n_hid, n_rid, n_tid
+
+
+if __name__ == "__main__":
+    data_mgr = DataMgr('data/', 100, True, 20)
+    batch_data = data_mgr.get_batch()
+    print(len(batch_data))

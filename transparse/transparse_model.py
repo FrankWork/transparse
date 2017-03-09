@@ -3,7 +3,7 @@ import random
 
 class TranSparseModel(object):
     def __init__(self, relation_num, entity_num, embedding_size,
-                sparse_index_head, sparse_index_tail, lr,l1_norm = False):
+                sparse_index_head, sparse_index_tail, lr, dtype, l1_norm = False):
         # Mh is Sparse Transfer Matrix of head for all relations.
         # Mh: r x m x n, m == n, r is relation num, n is embedding_size.
         # Mh[r] is Transfer Matrix for head for r-th relation.
@@ -56,7 +56,32 @@ class TranSparseModel(object):
 
         optimizer = tf.train.GradientDescentOptimizer(1.0).minimize(self.loss)
 
-    def step(self, session, x_train, y_train):
+    def step(self, session, batch_data):
+        # FIXME  
         summery, _, loss_val = session.run([self.merged, self.train, self.loss],
                 {self.x_train: x_train, self.y_train: y_train})
         return summery, loss_val
+
+if __name__ == "__main__":
+    with tf.name_scope('loss'):
+        with tf.name_scope('liner'):
+            with tf.name_scope('weights'):
+                W = tf.Variable([.3], tf.float32, name='W')
+            with tf.name_scope('bias'):
+                b = tf.Variable([-.3], tf.float32)
+            with tf.name_scope('x') :
+                x = tf.placeholder(tf.float32, name='x')
+            linear_model = W * x + b
+        loss = tf.reduce_sum(linear_model)
+        tf.summary.scalar('loss', loss)
+
+    sess = tf.Session()
+    init = tf.global_variables_initializer()
+    sess.run(init)
+
+    merged = tf.summary.merge_all()
+    train_writer = tf.summary.FileWriter('train/', sess.graph)
+
+    summary, y = sess.run([merged, loss], {x:[1,2,3,4]})
+    train_writer.add_summary(summary, y)
+    print(y)
