@@ -1,6 +1,8 @@
 __pycache__/
 data/
-model-output/
+1000-epoch-norm-p-output-3-20/
+output*/
 src/
 tmp*
 Train_TranSparse.cpp
+distributed.py

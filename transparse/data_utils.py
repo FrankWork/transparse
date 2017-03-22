@@ -134,12 +134,12 @@ class DataMgr(object):
         entity_embeddings = []
         with open(entity2vec_data) as f:
             for line in f:
-                embedding = line.split()
+                embedding = [float(i) for i in line.split()]
                 entity_embeddings.append(embedding)
         relation_embeddings = []
         with open(relation2vec_data) as f:
             for line in f:
-                embedding = line.split()
+                embedding = [float(i) for i in line.split()]
                 relation_embeddings.append(embedding)
 
         self.entity_embeddings = entity_embeddings
@@ -149,39 +149,52 @@ class DataMgr(object):
         n = self.embedding_size
         r = self.relation_num
 
-        sparse_index_head = [ [0 for _ in range(n)] for _ in range(r)]
+        sparse_index_head = []
         with open(sparse_index_head_data) as f:
             for line_num, line in enumerate(f):
                 indices = line.split()
                 rid = line_num // n
                 row = line_num % n
                 # nozero_num = int(indices[0])
-                sparse_index_head[rid][row] = [int(i) for i in indices[1:]]
+                for col in indices[1:]:
+                    sparse_index_head.append([rid, row, int(col)])
 
-        sparse_index_tail = [ [0 for _ in range(n)] for _ in range(r)]
+        sparse_index_tail = []
         with open(sparse_index_tail_data) as f:
             for line_num, line in enumerate(f):
                 indices = line.split()
                 rid = line_num // n
                 row = line_num % n
                 # nozero_num = int(indices[0])
-                sparse_index_tail[rid][row] = [int(i) for i in indices[1:]]
-
+                for col in indices[1:]:
+                    sparse_index_tail.append([rid, row, int(col)])
         self.sparse_index_head = sparse_index_head
         self.sparse_index_tail = sparse_index_tail
 
     def get_batch(self):
-        batch_data = []
+        rids=[]
+        hids=[]
+        tids=[]
+        n_hids=[]
+        n_tids=[]
+        flag_heads = []
         for _ in range(self.batch_size):
             pos_triplet = random.choice(self.train_data)
-            neg_triplet = self._generate_negative_triplet(pos_triplet)
-            batch_data.append( (pos_triplet, neg_triplet) )
-        return batch_data
+            h, r, t = pos_triplet
+            nh, nt, replace_head = self._generate_negative_triplet(pos_triplet)
+
+            rids.append(r)
+            hids.append(h)
+            tids.append(t)
+            n_hids.append(nh)
+            n_tids.append(nt)
+            flag_heads.append(replace_head)
+        return rids, hids, tids, n_hids, n_tids, flag_heads
 
     def _generate_negative_triplet(self, pos_triplet):
         hid, rid, tid =  pos_triplet
-        n_hid, n_rid, n_tid = pos_triplet
-
+        n_hid, _, n_tid = pos_triplet
+        replace_head = None
         # probability of replace head
         prob = 0.5 # uniform distribution
         if self.use_bern:
@@ -190,13 +203,15 @@ class DataMgr(object):
 
         if random.random() < prob:
             # replace head
+            replace_head = True
             while n_hid in self._head[rid][tid]:
                 n_hid = random.choice(self.entity_id_set)
         else:
             # replace tail
+            replace_head = False
             while n_tid in self._tail[rid][hid]:
                 n_tid = random.choice(self.entity_id_set)
-        return n_hid, n_rid, n_tid
+        return n_hid, n_tid, replace_head
 
 
 if __name__ == "__main__":
