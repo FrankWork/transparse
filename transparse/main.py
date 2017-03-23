@@ -88,11 +88,9 @@ def score():
                            #outputs = score,on_unused_input='ignore')
 score_f = score()
 
-for i in [0, 999]: #range(0,1000):
-
+path = 'output/'
+for i in [0]: #range(0,1000):
     print(i)
-    path = '1000-epoch-norm-p-output-3-20/'
-    # path = 'output-3-5/'
     entity2vec = np.loadtxt(path + 'entity2vec.bern'+str(i))
     relation2vec = np.loadtxt(path + 'relation2vec.bern'+str(i))
     A_h = np.loadtxt(path + 'A_h.bern'+str(i)).reshape((n_relation,20,20))

@@ -14,7 +14,7 @@ tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("margin", 4, "Used in margin-based loss function.")
 tf.app.flags.DEFINE_integer("relation_num", 11,
                             "Lelation number and sparse degree of matrix.")
-tf.app.flags.DEFINE_integer("epoch", 50,
+tf.app.flags.DEFINE_integer("epoch", 1000,
                             "Epoch number to run.")
 tf.app.flags.DEFINE_integer("batch_size", 100,
                             "Size of the mini-batch.")
@@ -34,7 +34,6 @@ tf.app.flags.DEFINE_boolean("eval", False,
 FLAGS = tf.app.flags.FLAGS
 
 def train():
-    print('*'*40)
     data_mgr = data_utils.DataMgr(FLAGS.data_dir, FLAGS.batch_size,
                                   FLAGS.use_bern, FLAGS.embedding_size)
     model = transparse_model.TranSparseModel(
@@ -51,7 +50,12 @@ def train():
                                              data_mgr.sparse_index_tail
                                              )
     saver = model.saver
-    with tf.Session() as session:
+    # Config to turn on JIT compilation
+    config = tf.ConfigProto()
+    config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+
+    with tf.Session(config=config) as session:
+        print('*'*40)
         train_writer = tf.summary.FileWriter(FLAGS.train_dir, session.graph)
         # test_writer = tf.summary.FileWriter(FLAGS.train_dir + '/summaries/test')
 
@@ -79,27 +83,27 @@ def train():
             print ("epoch %d epoch-time %.2f loss %.2f" % (epoch,
                              epoch_time, epoch_loss))
             # Save checkpoint
-            checkpoint_path = os.path.join(FLAGS.train_dir, "translate.ckpt")
+            checkpoint_path = os.path.join(FLAGS.train_dir, "transparse.ckpt")
             saver.save(session, checkpoint_path, global_step=model.global_step)
             sys.stdout.flush()
 
-def write_parameters_for_eval(path):
-    print('*'*40)
-    if path is None:
-        path = FLAGS.train_dir
+def write_parameters_for_eval():
+    path = FLAGS.train_dir
 
     data_mgr = data_utils.DataMgr(FLAGS.data_dir, FLAGS.batch_size,
                                   FLAGS.use_bern, FLAGS.embedding_size)
-    model = transparse_model.TranSparseModel(data_mgr.relation_num,
+    model = transparse_model.TranSparseModel(
+                                             FLAGS.margin,
+                                             FLAGS.learning_rate,
+                                             FLAGS.l1_norm,
+                                             data_mgr.relation_num,
                                              data_mgr.entity_num,
                                              data_mgr.embedding_size,
                                              data_mgr.batch_size,
                                              data_mgr.entity_embeddings,
                                              data_mgr.relation_embeddings,
-                                            #  data_mgr.sparse_index_head,
-                                            #  data_mgr.sparse_index_tail,
-                                             FLAGS.margin,
-                                             FLAGS.learning_rate
+                                             data_mgr.sparse_index_head,
+                                             data_mgr.sparse_index_tail
                                              )
     saver = model.saver
 
@@ -107,7 +111,8 @@ def write_parameters_for_eval(path):
         """
         the type of Mh, Mt, relations, entitys is np.ndarray
         """
-        relations_file = path + 'relation2vec.bern' + str(epoch)
+        relations_file = os.path.join(path,
+                                    'relation2vec.bern' + str(epoch))
         relation_num, embedding_size, _ = relations.shape
         relations = relations.reshape((relation_num, embedding_size))
         with open(relations_file, 'w') as f:
@@ -117,7 +122,8 @@ def write_parameters_for_eval(path):
                 f.write('\n')
 
 
-        entitys_file = path + 'entity2vec.bern' + str(epoch)
+        entitys_file = os.path.join(path,
+                                    'entity2vec.bern' + str(epoch))
         entity_num, embedding_size, _ = entitys.shape
         entitys = entitys.reshape((entity_num, embedding_size))
         with open(entitys_file, 'w') as f:
@@ -126,7 +132,8 @@ def write_parameters_for_eval(path):
                     f.write('%.6f ' % entitys[row][col])
                 f.write('\n')
 
-        A_h_file = path + 'A_h.bern' + str(epoch)
+        A_h_file = os.path.join(path,
+                                    'A_h.bern' + str(epoch))
         relation_num, rows, cols = Mh.shape
         with open(A_h_file, 'w') as f:
             for r in range(relation_num):
@@ -135,7 +142,8 @@ def write_parameters_for_eval(path):
                         f.write('%.6f ' % Mh[r][row][col])
                     f.write('\n')
 
-        A_t_file = path + 'A_t.bern' + str(epoch)
+        A_t_file = os.path.join(path,
+                                    'A_t.bern' + str(epoch))
         relation_num, rows, cols = Mt.shape
         with open(A_t_file, 'w') as f:
             for r in range(relation_num):
@@ -200,82 +208,23 @@ def test_small_model():
 
         session.run(tf.global_variables_initializer())
 
-        # Mh, Mt, relations, entitys = model.get_matrix_and_embeddings(session)
-        # print('*' * 80)
-        # print('Mh')
-        # print(Mh)
-        # print('*' * 80)
-        # print('Mt')
-        # print(Mt)
-        # print('*' * 80)
-        # print('relations')
-        # print(relations)
-        # print('*' * 80)
-        # print('entitys')
-        # print(entitys)
-        # print('*' * 80)
-        # mask_h, mask_t = model.get_mask(session)
-        # print('*' * 80)
-        # print('mask_h')
-        # print(mask_h)
-        # print('*' * 80)
-        # print('mask_t')
-        # print(mask_t)
-
-        # for i in range(epoch_num):
-        #     logits, loss, Mh, Mt, r, e, grad_val = model.test_minibatch(
-        #                 session, rids, hids, tids, n_hids, n_tids, flag_heads)
-        #     print('step: %d, loss: %.2f' % (i, loss))
-        #
-        # gMh, _ = grad_val[0]
-        # gMt, _ = grad_val[1]
-        # gr, _ = grad_val[2]
-        # ge, _ = grad_val[3]
-        #
-        # print('='*80)
-        # print('='*80)
-        #
-        # print('logits: ')
-        # print(logits)
-        # print('*' * 80)
-        # print('loss: ')
-        # print(loss)
-        # print('*' * 80)
-        # print('Mh')
-        # print(Mh)
-        # print('*' * 80)
-        # print('gMh')
-        # print(gMh)
-        # print('*' * 80)
-        # print('Mt')
-        # print(Mt)
-        # print('*' * 80)
-        # print('gMt')
-        # print(gMt)
-        # print('*' * 80)
-        # print('r')
-        # print(r)
-        # print('*' * 80)
-        # print('gr')
-        # print(gr)
-        # print('*' * 80)
-        # print('e')
-        # print(e)
-        # print('*' * 80)
-        # print('ge')
-        # print(ge)
-
         for i in range(epoch_num):
-            model.test_minibatch(session, rids, hids, tids, n_hids, n_tids, flag_heads)
-            # print('step: %d, loss: %.2f' % (i, loss))
+            loss, gvs = model.test_optimizer(
+                        session, rids, hids, tids, n_hids, n_tids, flag_heads)
+            print('step: %d, loss: %.2f' % (i, loss))
+            for g,v in gvs:
+                print('*' * 80)
+                print(g)
+                print('*' * 80)
+                print(v)
+
 
 def main(_):
     if FLAGS.test:
         test_small_model()
     elif FLAGS.eval:
-        print('eval:')
-        path = '1000-epoch-norm-p-output-3-20/'
-        write_parameters_for_eval(path)
+        print('write_parameters_for_eval:')
+        write_parameters_for_eval()
     else:
         train()
 

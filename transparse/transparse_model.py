@@ -24,9 +24,11 @@ class TranSparseModel(object):
 
                 shape = [relation_num, embedding_size, embedding_size]
                 mask_h = tf.sparse_to_dense(sparse_index_head, shape,
-                                            tf.ones([len(sparse_index_head)]))
+                                            tf.ones([len(sparse_index_head)]),
+                                            name='mask_h')
                 mask_t = tf.sparse_to_dense(sparse_index_tail, shape,
-                                            tf.ones([len(sparse_index_tail)]))
+                                            tf.ones([len(sparse_index_tail)]),
+                                            name='mask_t')
 
             with tf.name_scope('Input'):
                 # mini-batch input, shape: b, b is batch_size
@@ -96,10 +98,16 @@ class TranSparseModel(object):
 
             with tf.name_scope('Loss'):
                 # projected heads and tails
-                h_p = tf.matmul(Mh_batch, h_embed)
-                t_p = tf.matmul(Mt_batch, t_embed)
-                neg_h_p = tf.matmul(Mh_batch, neg_h_embed)
-                neg_t_p = tf.matmul(Mt_batch, neg_t_embed)
+
+                # h_p = tf.matmul(Mh_batch, h_embed, a_is_sparse=True, name='h_p')
+                # t_p = tf.matmul(Mt_batch, t_embed, a_is_sparse=True, name='t_p')
+                # neg_h_p = tf.matmul(Mh_batch, neg_h_embed, a_is_sparse=True, name='neg_h_p')
+                # neg_t_p = tf.matmul(Mt_batch, neg_t_embed, a_is_sparse=True, name='neg_t_p')
+
+                h_p = tf.matmul(Mh_batch, h_embed, name='h_p')
+                t_p = tf.matmul(Mt_batch, t_embed, name='t_p')
+                neg_h_p = tf.matmul(Mh_batch, neg_h_embed,  name='neg_h_p')
+                neg_t_p = tf.matmul(Mt_batch, neg_t_embed,  name='neg_t_p')
                 score_pos = h_p + r_embed - t_p
                 score_neg = neg_h_p + r_embed - neg_t_p
                 if l1_norm:
@@ -109,8 +117,8 @@ class TranSparseModel(object):
                     score_pos = tf.square(score_pos)
                     score_neg = tf.square(score_neg)
 
-                logits = tf.maximum(margin + score_pos - score_neg, 0)
-                loss = tf.reduce_sum(logits)
+                logits = tf.maximum(margin + score_pos - score_neg, 0, name='logits')
+                loss = tf.reduce_sum(logits, name='loss')
 
                 tf.summary.scalar('loss', loss)
 
@@ -118,11 +126,28 @@ class TranSparseModel(object):
                 optimizer = tf.train.GradientDescentOptimizer(lr)
                 grad_val = optimizer.compute_gradients(loss, [Mh, Mt,
                                         relation_embeddings, entity_embeddings])
+
                 gh, vh = grad_val[0]
                 gt, vt = grad_val[1]
-                mask_grad_val = [(tf.multiply(gh, mask_h_batch), vh),
-                                (tf.multiply(gt, mask_t_batch), vt),
-                                grad_val[2], grad_val[3]]
+
+                # gh is IndexedSlices
+                # mask_h_batch is Tensor
+                mask_gh = tf.IndexedSlices(
+                                    tf.multiply(gh.values, mask_h_batch),
+                                    gh.indices, gh.dense_shape
+                                    )
+                mask_gt = tf.IndexedSlices(
+                                    tf.multiply(gt.values, mask_t_batch),
+                                    gt.indices, gt.dense_shape
+                                    )
+
+                mask_grad_val = [(mask_gh, vh),
+                                (mask_gt, vt),
+                                grad_val[2],
+                                grad_val[3]
+                                ]
+                # grad_val = [(tf.clip_by_value(grad, -0.5, 0.5), var) for grad, var in grad_val]
+
                 # mask_grad_val = grad_val
                 train_op = optimizer.apply_gradients(mask_grad_val)
 
@@ -152,36 +177,68 @@ class TranSparseModel(object):
                                         rids,
                                         r_embed)
 
-            # with tf.name_scope('Norm_Projected'):
-            #     neg_p = tf.where(flag_heads, neg_h_p, neg_t_p)
-            #     loss_p = tf.reduce_sum(tf.maximum(h_p-1, 0) + \
-            #                            tf.maximum(t_p-1, 0) + \
-            #                            tf.maximum(neg_p-1, 0))
-            #
-            #     optimizer_p = tf.train.GradientDescentOptimizer(lr)
-            #
-            #     grad_val_p = optimizer_p.compute_gradients(loss_p,
-            #                                         var_list=[Mh, Mt,
-            #                                             relation_embeddings,
-            #                                             entity_embeddings])
-            #     # gh, vh = grad_val_p[0]
-            #     # gt, vt = grad_val_p[1]
-            #     # mask_grad_val_p = [(tf.multiply(gh, mask_h_batch), vh),
-            #     #                 (tf.multiply(gt, mask_t_batch), vt),
-            #     #                 grad_val_p[2], grad_val_p[3]]
-            #     mask_grad_val_p = grad_val_p
-            #     train_p_op = optimizer_p.apply_gradients(mask_grad_val_p)
+            with tf.name_scope('Projected'):
+                def body(_):
+                    with tf.name_scope('Embedding_Lookup'):
+                        h_embed = tf.nn.embedding_lookup(entity_embeddings,
+                                                    hids, name='h_embed')
+                        t_embed = tf.nn.embedding_lookup(entity_embeddings,
+                                                    tids, name='t_embed')
+                        neg_h_embed = tf.nn.embedding_lookup(entity_embeddings,
+                                                    n_hids,name='neg_h_embed')
+                        neg_t_embed = tf.nn.embedding_lookup(entity_embeddings,
+                                                    n_tids,name='neg_t_embed')
+                        Mh_batch = tf.nn.embedding_lookup(Mh, rids,
+                                                    name='Mh_batch')
+                        Mt_batch = tf.nn.embedding_lookup(Mt, rids,
+                                                    name='Mt_batch')
+                    with tf.name_scope('Projected'):
+                        h_p = tf.matmul(Mh_batch, h_embed, name='h_p')
+                        t_p = tf.matmul(Mt_batch, t_embed, name='t_p')
+                        neg_h_p = tf.matmul(Mh_batch, neg_h_embed,  name='neg_h_p')
+                        neg_t_p = tf.matmul(Mt_batch, neg_t_embed,  name='neg_t_p')
+                        neg_p = tf.where(flag_heads, neg_h_p, neg_t_p)
+                    with tf.name_scope('Loss'):
+                        loss_p = tf.reduce_sum(
+                            tf.maximum(tf.reduce_sum(tf.square(h_p))-1, 0) + \
+                            tf.maximum(tf.reduce_sum(tf.square(t_p))-1, 0) + \
+                            tf.maximum(tf.reduce_sum(tf.square(neg_p))-1, 0)
+                            )
+                    with tf.name_scope('Gradients'):
+                        grad_val_p = optimizer.compute_gradients(loss_p)
+                        # NOTE: if there is a `NoneType` grad in grad_val pair,
+                        # the entire grad_val list is not fetchable.
+                        grad_val_p = [(g,v) for g,v in grad_val_p if g is not None]
+                        gh, vh = grad_val_p[0]
+                        gt, vt = grad_val_p[1]
+                        mask_gh = tf.IndexedSlices(
+                                            tf.multiply(gh.values, mask_h_batch),
+                                            gh.indices, gh.dense_shape
+                                            )
+                        mask_gt = tf.IndexedSlices(
+                                            tf.multiply(gt.values, mask_t_batch),
+                                            gt.indices, gt.dense_shape
+                                            )
+                        mask_grad_val_p = [(mask_gh, vh),
+                                        (mask_gt, vt),
+                                        grad_val[2]
+                                        ]
+                        train_p_op = optimizer.apply_gradients(mask_grad_val_p)
+
+                    # tf_print = tf.Print(loss_p, [loss_p])
+                    with tf.control_dependencies([train_p_op]):#tf_print,
+                        return tf.cond(tf.greater(loss_p, 0.) ,
+                                        lambda : tf.assign(flag, True),
+                                        lambda : tf.assign(flag, False)
+                                        )
+                flag = tf.Variable(True, trainable=False, dtype=tf.bool)
+                # Value of flag is True in Epoch 0, and False in other Epoch
+                with tf.control_dependencies([tf.assign(flag, True)]):
+                    while_op = tf.while_loop(lambda x: x, body, [flag])
 
         self.merged = tf.summary.merge_all()
         self.global_step = tf.Variable(initial_value=0, trainable=False)
         self.saver = tf.train.Saver(tf.global_variables())
-
-        self.Mh = Mh
-        self.Mt = Mt
-        self.mask_h = mask_h
-        self.mask_t = mask_t
-        self.relations = relation_embeddings
-        self.entitys = entity_embeddings
 
         self.rids = rids
         self.hids = hids
@@ -190,239 +247,37 @@ class TranSparseModel(object):
         self.n_tids = n_tids
         self.flag_heads = flag_heads
 
+        self.Mh = Mh
+        self.Mt = Mt
+        self.relations = relation_embeddings
+        self.entitys = entity_embeddings
+
         self.logits = logits
         self.loss = loss
         self.train_op = train_op
-        self.grad_val = mask_grad_val
         self.norm_op = r_norm_op
+        self.gvs = mask_grad_val
 
-        # self.loss_p = loss_p
-        # self.train_p_op = train_p_op
-        # self.grad_val_p = mask_grad_val_p
-
+        self.train_p_op = while_op#train_p_op
 
     def train_minibatch(self, session, rids, hids, tids, n_hids,
                                                     n_tids, flag_heads):
         feed_dict = {self.rids:rids, self.hids:hids, self.tids:tids,
                      self.n_hids:n_hids, self.n_tids:n_tids,
                      self.flag_heads:flag_heads}
-        summary, _, _, loss_val = session.run([self.merged,
-                     self.train_op, self.norm_op, self.loss],
+        summary, _, _, _, loss_val = session.run([self.merged,
+                     self.train_op, self.norm_op, self.train_p_op, self.loss],
                      feed_dict=feed_dict)
-        _, loss_p = session.run([self.train_p_op, self.loss_p],
-                             feed_dict=feed_dict)
-        while(loss_p > 0):
-            _, loss_p = session.run([self.train_p_op, self.loss_p],
-                                 feed_dict=feed_dict)
         return summary, loss_val
 
     def get_matrix_and_embeddings(self, session):
-        Mh, Mt, relations, entitys = session.run([self.Mh, self.Mt,
-                                                self.relations, self.entitys])
-        return Mh, Mt, relations, entitys
-    def get_mask(self, session):
-        mask_h, mask_t = session.run([self.mask_h, self.mask_t])
-        return mask_h, mask_t
+        return session.run([self.Mh, self.Mt, self.relations, self.entitys])
 
-    def test_minibatch(self, session, rids, hids, tids, n_hids, n_tids, flag_heads):
+    def test_optimizer(self, session, rids, hids, tids, n_hids, n_tids, flag_heads):
         feed_dict={self.rids:rids, self.hids:hids, self.tids:tids,
-            self.n_hids:n_hids, self.n_tids:n_tids, self.flag_heads:flag_heads}
-        # fetch_list = [self.train_op, self.norm_op, self.logits, self.loss, self.Mh, self.Mt,
-        #                 self.relations, self.entitys, self.grad_val]
-        # _, _, logits, loss, Mh, Mt, r, e, grad_val = session.run(fetch_list, feed_dict)
-
-        _, loss_p1, grad_val_p1= session.run(#
-                                    [self.train_p_op, self.loss_p, self.grad_val_p],#
-                                    feed_dict
-                                    )
-        print(loss_p1)
-        # for g,v in grad_val_p1:
-        #     print('*' * 80)
-        #     print(v)
-        #     print('*' * 80)
-        #     print(g)
-
-        # while(loss_p > 0):
-        #     _, loss_p, grad_val_p= session.run([self.train_p_op, self.loss_p, self.grad_val_p],
-        #                          feed_dict=feed_dict)
-        #     for g,v in grad_val_p:
-        #         print('*' * 80)
-        #         print(v)
-        #         print('*' * 80)
-        #         print(g)
-
-        # return logits, loss ,Mh, Mt, r, e, grad_val
-
-
-def test_update_norm():
-    h_in = [0, 1]
-    h_num = 3
-    embedding_size = 3
-
-    embeddings = tf.Variable(2  * tf.ones([h_num, embedding_size, 1]))
-    h = tf.placeholder(tf.int32, [2])
-    embed = tf.nn.embedding_lookup(embeddings, h)
-
-    def norm_op(embeddings, ids, embed):
-        norm = tf.norm(embed, axis=1, keep_dims=True)
-        indices = tf.where(tf.greater(norm, 1))
-
-        gather_embed = tf.gather(embed, indices)
-        gather_norm = tf.gather(norm, indices)
-        gather_ids = tf.gather(ids, indices)
-
-        normed_embed = gather_embed / gather_norm
-        return norm, normed_embed, tf.scatter_update(embeddings, gather_ids, normed_embed)
-        # return norm, normed_embed, tf.cond(norm > 1, fn1, lambda: embed)
-
-    norm, normed_embed, update_op = norm_op(embeddings, h, embed)
-
-    with tf.Session() as session:
-        session.run(tf.global_variables_initializer())
-
-        _, e, n, ne, eds = session.run([update_op, embed, norm, normed_embed, embeddings], feed_dict={h:h_in})
-
-        print(e)
-        print('*' * 40)
-        print(n)
-        print('*' * 40)
-        print(ne)
-        print('*' * 40)
-        print(eds)
-        print('=' * 80)
-
-def test_boolean_index():
-    # tf.less
-    # tf.gather
-    # tf.where
-    # tf.cond
-    val = tf.random_uniform([10], minval=0, maxval=9, dtype=tf.float32)
-    less = tf.less(val, 5)
-    # indices = tf.range(10)
-    indices = tf.where(less)
-    val5 = tf.gather(val, indices)
-
-    with tf.Session() as session:
-        session.run(tf.global_variables_initializer())
-
-        val = session.run([val, less, indices, val5])
-        for v in val:
-            print(v)
-            print('*' * 40)
-
-def test_concat_ids():
-    flags = tf.Variable([True, False, True], dtype=tf.bool)
-    ones = tf.Variable(tf.ones([3], dtype=tf.float32))
-    zeros = tf.Variable(tf.zeros([3],dtype=tf.float32))
-    val = tf.where(flags, ones, zeros)
-
-    with tf.Session() as session:
-        session.run(tf.global_variables_initializer())
-
-        val = session.run([val])
-        print('*' * 80)
-        print(val)
-
-def test_matmul():
-    # @tf.RegisterGradient("CustomMatmul")
-    # def _custom_matmul_grad(op, grad):
-    #     # grad = tf.gradients(op.outputs, op.inputs)
-    #     mask = tf.eye(3)
-    #     print(tf.grad_fn(op, grad))
-    #     return [op.inputs[0], op.inputs[1]]
-
-    with tf.Graph().as_default() as g:
-        s = tf.SparseTensor(indices=[[0,0],[1,1],[2,2]], values=[1., 1., 1.], dense_shape=[3,3])
-        mask = tf.sparse_tensor_to_dense(s)
-        w = tf.Variable(np.eye(3), dtype=tf.float32)
-        x = tf.constant([1,2,3], dtype=tf.float32, shape=[3,1])
-        # with g.gradient_override_map({"SparseMatMul": "CustomMatmul"}):
-        logits = tf.matmul(w, x, a_is_sparse=True)
-        loss = logits
-        optimizer = tf.train.GradientDescentOptimizer(0.1)#.minimize(loss)
-        grad_val = optimizer.compute_gradients(loss)
-        # mask = tf.eye(3)
-        grad_val = [(tf.multiply(grad_val[0][0], mask), grad_val[0][1])]
-        train_op = optimizer.apply_gradients(grad_val)
-
-    with tf.Session(graph=g) as session:
-        # session = tf_debug.LocalCLIDebugWrapperSession(session)
-        # session.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
-
-        session.run(tf.global_variables_initializer())
-        _, g_v, w = session.run([train_op, grad_val, w])
-
-        for g, v in g_v:
-            print(g)
-            print('*' * 80)
-            print(v)
-    # [[ 1.  0.  0.]
-    #  [ 0.  2.  0.]
-    #  [ 0.  0.  3.]]
-    # ********************************************************************************
-    # [[ 0.89999998  0.          0.        ]
-    #  [ 0.          0.80000001  0.        ]
-    #  [ 0.          0.          0.69999999]]
-
-def test_square():
-    @tf.RegisterGradient("CustomSquare")
-    def _custom_square_grad(op, grad):
-      return tf.constant([101.0])
-
-    with tf.Graph().as_default() as g:
-      c = tf.Variable([5.0], dtype=tf.float32)
-      s_1 = tf.square(c)  # Uses the default gradient for tf.square.
-      with g.gradient_override_map({"Square": "CustomSquare"}):
-        s_2 = tf.square(c, name='Square')
-
-      optimizer = tf.train.GradientDescentOptimizer(0.1)#.minimize(loss)
-      grad_val = optimizer.compute_gradients(s_2)
-      train_op = optimizer.apply_gradients(grad_val)
-
-    with tf.Session(graph=g) as session:
-        session.run(tf.global_variables_initializer())
-
-        _, g_v = session.run([train_op, grad_val])
-
-        for g, v in g_v:
-            print(g)
-            print('*' * 80)
-            print(v)
-    # [ 101.]
-    # ********************************************************************************
-    # [-5.10000038]
-
-def test_abs():
-    @tf.RegisterGradient("CustomSquare")
-    def _custom_square_grad(op, grad):
-      return tf.constant([101.0])
-
-    with tf.Graph().as_default() as g:
-      c = tf.Variable([5.0], dtype=tf.float32)
-      with g.gradient_override_map({"Abs": "CustomSquare"}):
-        s_2 = tf.abs(c, name='Abs')
-
-      optimizer = tf.train.GradientDescentOptimizer(0.1)#.minimize(loss)
-      grad_val = optimizer.compute_gradients(s_2)
-      train_op = optimizer.apply_gradients(grad_val)
-
-    with tf.Session(graph=g) as session:
-        session.run(tf.global_variables_initializer())
-
-        _, g_v = session.run([train_op, grad_val])
-
-        for g, v in g_v:
-            print(g)
-            print('*' * 80)
-            print(v)
-    # [ 101.]
-    # ********************************************************************************
-    # [-5.10000038]
-
-if __name__ == "__main__":
-    # test_update_norm()
-    # test_boolean_index()
-    # test_concat_ids()
-    test_matmul()
-    # test_square()
-    # test_abs()
+            self.n_hids:n_hids, self.n_tids:n_tids,
+            self.flag_heads:flag_heads
+        }
+        _, _, _, loss, gvs = session.run([self.train_op, self.norm_op,
+                            self.train_p_op, self.loss, self.gvs], feed_dict)
+        return loss, gvs
