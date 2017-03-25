@@ -6,12 +6,6 @@ import random
 
 class DataMgr(object):
     def __init__(self, data_path, batch_size, use_bern, embedding_size):
-        print('Parameters of DataMgr:')
-        print('\tdata_path: %s' % data_path)
-        print('\tbatch_size: %d' % batch_size)
-        print('\tuse_bern: %s' % 'True' if use_bern else 'False')
-        print('\tembedding_size: %d' % embedding_size)
-
         self.use_bern = use_bern
         self.batch_size = batch_size
         self.embedding_size = embedding_size
@@ -103,8 +97,7 @@ class DataMgr(object):
                     tail[rid][hid] = [tid]
                 else:
                     tail[rid][hid].append(tid)
-        self.num_batches = len(train_data) // self.batch_size
-        print('\tnum_batches %d' %self.num_batches)
+        self.steps_per_epoch = len(train_data) // self.batch_size
         self._head = head
         self._tail = tail
         self.train_data = train_data

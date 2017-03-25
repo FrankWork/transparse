@@ -229,7 +229,7 @@ private:
     {
         res=0;
         int nbatches=100;
-        int nepoch = 1000;
+        int nepoch = 100;
         int batchsize = fb_h.size()/nbatches;
         relation_tmp=relation_vec;
         entity_tmp = entity_vec;
