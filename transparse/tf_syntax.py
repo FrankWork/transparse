@@ -240,6 +240,24 @@ def test_segment_sum():
         print(session.run([sum_values]))
         print(session.run([avg_values]))
 
+
+def test_iterate_vector():
+    x = tf.range(10)#tf.constant()
+    y = 2 * tf.range(10)#tf.constant()
+    batch = tf.stack([x, y], axis=1)
+    N = batch.shape[0]
+    i = tf.constant(0)
+    c = lambda i: tf.less(i, N)
+    def b(i):
+        xi, yi = tf.unstack(batch[i])
+        with tf.control_dependencies([tf.Print(i, [xi, yi])]):
+            return tf.add(i, 1)
+
+    op = tf.while_loop(c, b, [i])
+
+    with tf.Session() as session:
+        session.run([op])
+
 if __name__ == "__main__":
     # test_update_norm()
     # test_boolean_index()
@@ -247,4 +265,6 @@ if __name__ == "__main__":
     # test_matmul()
     # test_square()
     # test_multiply_IndexedSlices()
-    test_segment_sum()
+    # test_segment_sum()
+    test_iterate_vector()
+    test_iterate_vector()

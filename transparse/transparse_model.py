@@ -61,9 +61,9 @@ class TranSparseModel(object):
             self.relations = relations
             self.entitys = entitys
 
-    def _embed_lookup(self):
+    def _embed_lookup(self, inputs):
         with tf.name_scope('Embedding_Lookup'):
-            (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
+            (rids, hids, tids, n_hids, n_tids, flag_heads) = inputs
             r = tf.nn.embedding_lookup(self.relations, rids, name='r')
             h = tf.nn.embedding_lookup(self.entitys, hids, name='h')
             t = tf.nn.embedding_lookup(self.entitys, tids, name='t')
@@ -99,7 +99,7 @@ class TranSparseModel(object):
 
     def _optimize_graph(self, margin, lr, l1_norm):
         with tf.name_scope('Loss'):
-            r,h,t,neg_h,neg_t,Mh,Mt,mask_h,mask_t = self._embed_lookup()
+            r,h,t,neg_h,neg_t,Mh,Mt,mask_h,mask_t = self._embed_lookup(self.inputs)
             h_p, t_p, neg_h_p, neg_t_p = self._projected_entity(Mh, Mt, h, t, neg_h, neg_t)
 
             if l1_norm:
@@ -159,8 +159,8 @@ class TranSparseModel(object):
             return tf.scatter_update(embeddings, gather_ids, normed_embed)
 
         with tf.name_scope('Norm'):
-            r,h,t,neg_h,neg_t,Mh,Mt,mask_h,mask_t = self._embed_lookup()
             (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
+            r,h,t,neg_h,neg_t,Mh,Mt,mask_h,mask_t = self._embed_lookup(self.inputs)
 
             n_ids = tf.where(flag_heads, n_hids, n_tids)
             neg = tf.where(flag_heads, neg_h, neg_t)
@@ -173,13 +173,75 @@ class TranSparseModel(object):
             with tf.control_dependencies([h_norm_op, t_norm_op, neg_norm_op, r_norm_op]):
                 return tf.no_op(name='norm_op')
 
+    def _norm_one_example(self, example):
+        continue_ = tf.Variable(True, trainable=False, dtype=tf.bool)
+        rid, hid, tid, n_hid, n_tid, flag_head = example
+        def body(_):
+            r,h,t,neg_h,neg_t,Mh,Mt,mask_h,mask_t = self._embed_lookup(example)
+            h_p, t_p, neg_h_p, neg_t_p = self._projected_entity(Mh, Mt, h, t, neg_h, neg_t)
+            n_ids = tf.where(flag_head, n_hid, n_tid)
+            neg_p = tf.where(flag_head, neg_h_p, neg_t_p)
+            with tf.name_scope('Loss'):
+                loss = tf.reduce_sum(
+                    tf.maximum(tf.reduce_sum(tf.square(h_p))-1, 0) + \
+                    tf.maximum(tf.reduce_sum(tf.square(t_p))-1, 0) + \
+                    tf.maximum(tf.reduce_sum(tf.square(neg_p))-1, 0)
+                    )
+            with tf.name_scope('Gradients'):
+                grad_val = self.optimizer.compute_gradients(loss)
+                # NOTE: if there is a `NoneType` grad in grad_val pair,
+                # the entire grad_val list is not fetchable.
+                grad_val = [(g,v) for g,v in grad_val if g is not None]
+                gh, vh = grad_val[0]# Mh_all
+                gt, vt = grad_val[1]# Mt_all
+                ge, ve = grad_val[2]# entitys
+                mask_gh, mask_gt = self._mask_grad(gh, gt, mask_h, mask_t)
+
+                mask_grad_val = [(mask_gh, vh),
+                                (mask_gt, vt),
+                                (ge, ve)]
+                norm_prjct_op = self.optimizer.apply_gradients(mask_grad_val)
+            with tf.control_dependencies([norm_prjct_op]):
+                 return tf.cond(tf.greater(loss, 0.) ,
+                                lambda : tf.assign(continue_, True),
+                                lambda : tf.assign(continue_, False)
+                                )
+        with tf.name_scope('Projected'):
+            # Value of flag is True in Epoch 0, and False in other Epoch
+            with tf.control_dependencies([tf.assign(continue_, True)]):
+                return tf.while_loop(lambda x: x, body, [continue_])
+
     def _norm_projected(self):
+        '''
+        Slow!
+        High accuracy!!
+        '''
+        with tf.name_scope('Projected'):
+            (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
+            batch = tf.stack([rids, hids, tids, n_hids, n_tids], axis=1)
+            b_sz = batch.shape[0] # batch_size
+            i = tf.constant(0)
+            cond = lambda i: tf.less(i, b_sz)
+            def process_one_example(i):
+                rid, hid, tid, n_hid, n_tid = tf.unstack(batch[i])
+                flag_head = flag_heads[i]
+                example = (rid, hid, tid, n_hid, n_tid, flag_head)
+                norm_one_op = self._norm_one_example(example)
+                with tf.control_dependencies([norm_one_op]):
+                    return tf.add(i, 1)
+            return tf.while_loop(cond, process_one_example, [i])
+
+    def _norm_projected_v0(self):
+        '''
+        Fast!
+        Low accuracy!!
+        '''
         flag = tf.Variable(True, trainable=False, dtype=tf.bool)
 
         def body(_):
+            (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
             r,h,t,neg_h,neg_t,Mh,Mt,mask_h,mask_t = self._embed_lookup()
             h_p, t_p, neg_h_p, neg_t_p = self._projected_entity(Mh, Mt, h, t, neg_h, neg_t)
-            (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
             n_ids = tf.where(flag_heads, n_hids, n_tids)
             neg_p = tf.where(flag_heads, neg_h_p, neg_t_p)
 

@@ -3,16 +3,11 @@ Implement the model of TranSparse described in  [Ji et al., 2016](http://www.aaa
 
 Training:
 ```bash
-$ python3 transparse.py
+$ python3 transparse.py # Train
+$ python evaluate.py    # Evaluate
 ```
 
 Test and debug:
 ```bash
 $ python3 transparse.py --test --debug
-```
-
-Evaluate
-```bash
-$ python3 transparse.py --eval
-$ python3 main.py
 ```

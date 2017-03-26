@@ -14,12 +14,12 @@ tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("margin", 4, "Used in margin-based loss function.")
 tf.app.flags.DEFINE_integer("relation_num", 11,
                             "Lelation number and sparse degree of matrix.")
-tf.app.flags.DEFINE_integer("epochs", 100,
+tf.app.flags.DEFINE_integer("epochs", 3,
                             "How many epochs to run.")
-tf.app.flags.DEFINE_integer("batch_size", 11,
-                            "Size of the mini-batch.")
-tf.app.flags.DEFINE_integer("epochs_per_eval", 20,
+tf.app.flags.DEFINE_integer("epochs_per_eval", 1,
                             "How many training epochs write parameters to file.")
+tf.app.flags.DEFINE_integer("batch_size", 100,
+                            "Size of the mini-batch.")
 tf.app.flags.DEFINE_integer("embedding_size", 20, "embedding_size")
 tf.app.flags.DEFINE_boolean("use_bern", True,
                             "Bernoulli or uniform distribution.")
