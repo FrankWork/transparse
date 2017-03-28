@@ -4,3 +4,4 @@ src/
 tmp*
 multithread.py
 distributed.py
+.remote-sync.json
