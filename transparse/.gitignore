@@ -4,4 +4,5 @@ src/
 tmp*
 multithread.py
 distributed.py
-.remote-sync.json
+.ipynb_checkpoints/
+.vscode/

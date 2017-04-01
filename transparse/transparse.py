@@ -8,13 +8,20 @@ import sys
 import data_utils
 import transparse_model
 
+
+# compile:
+# TF_INC=$(python -c 'import tensorflow as tf; print(tf.sysconfig.get_include())')
+# g++ -std=c++11 -shared norm_prjct_op.cc norm_prjct_kernel.cc -o norm_prjct_op.so \
+#     -fPIC -I $TF_INC -O2 -D_GLIBCXX_USE_CXX11_ABI=0
+
+
 tf.app.flags.DEFINE_string("data_dir", "data/", "Data directory")
 tf.app.flags.DEFINE_string("train_dir", "output/", "Training directory.")
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("margin", 4, "Used in margin-based loss function.")
 tf.app.flags.DEFINE_integer("relation_num", 11,
                             "Lelation number and sparse degree of matrix.")
-tf.app.flags.DEFINE_integer("epochs", 3,
+tf.app.flags.DEFINE_integer("epochs", 1,
                             "How many epochs to run.")
 tf.app.flags.DEFINE_integer("epochs_per_eval", 1,
                             "How many training epochs write parameters to file.")
@@ -61,7 +68,7 @@ def create_model():
     print('\tmargin: %d' % FLAGS.margin)
     print('\tlearning_rate: %s' % FLAGS.learning_rate)
     print('\tl1_norm: %d' % FLAGS.l1_norm)
-    print('\random_embed: %d' % FLAGS.random_embed)
+    print('\trandom_embed: %d' % FLAGS.random_embed)
 
     print('\tepochs: %d' % FLAGS.epochs)
     print('\tsteps_per_epoch: %d' % data_mgr.steps_per_epoch)

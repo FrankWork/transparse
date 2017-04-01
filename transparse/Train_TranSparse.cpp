@@ -193,7 +193,7 @@ private:
 		        double tmp = 0;
                         non_zero = sparse_id[ii].size();
 		        for (int jj=0; jj<non_zero; jj++)
-		            tmp+=A[sparse_id[ii][jj]][ii]*a[sparse_id[ii][jj]];
+		            tmp+=A[ sparse_id[ii][jj] ][ii]*a[sparse_id[ii][jj]];
 		        x+=sqr(tmp);
 		    }
 		    if (x>1)
@@ -280,7 +280,7 @@ private:
 						}
 
 						norm(entity_tmp[k]);
-						norm(entity_tmp[k],A_h_tmp[fb_r[i]],sparse_id_l[fb_r[i]]);
+						norm(entity_tmp[k],A_h_tmp[fb_r[i]],sparse_id_        l[fb_r[i]]);
 						norm(entity_tmp[k],A_t_tmp[fb_r[i]],sparse_id_r[fb_r[i]]);
              		}
 		            relation_vec = relation_tmp;

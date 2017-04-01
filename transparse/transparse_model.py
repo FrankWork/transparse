@@ -2,11 +2,14 @@ import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 import numpy as np
 
+op_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'norm_prjct_op.so')
+norm_prjct_module = tf.load_op_library(op_path)
+
 class TranSparseModel(object):
     def __init__(self, margin, lr, l1_norm,
-                r_num, e_num, # relation_num, entity_num
-                e_sz, b_sz, # embedding_size, batch_size
-                e_embed, r_embed, # pre-trained embeddings
+                r_num, e_num, # relation_num, entity_num 
+                e_sz, b_sz, # embedding_size, batch_size 
+                e_embed, r_embed, # pre-trained embeddings 
                 mask_h_idx, mask_t_idx):
 
         self._global_tensor(r_num, e_num, e_sz, b_sz, e_embed, r_embed, mask_h_idx, mask_t_idx)
@@ -67,8 +70,8 @@ class TranSparseModel(object):
             r = tf.nn.embedding_lookup(self.relations, rids, name='r')
             h = tf.nn.embedding_lookup(self.entitys, hids, name='h')
             t = tf.nn.embedding_lookup(self.entitys, tids, name='t')
-            neg_h = tf.nn.embedding_lookup(self.entitys, n_hids,name='neg_h')
-            neg_t = tf.nn.embedding_lookup(self.entitys, n_tids,name='neg_t')
+            neg_h = tf.nn.embedding_lookup(self.entitys, n_hids, name='neg_h')
+            neg_t = tf.nn.embedding_lookup(self.entitys, n_tids, name='neg_t')
             Mh = tf.nn.embedding_lookup(self.Mh_all, rids, name='Mh')
             Mt = tf.nn.embedding_lookup(self.Mt_all, rids, name='Mt')
             mask_h = tf.nn.embedding_lookup(self.mask_h_all, rids, name='mask_h')
@@ -138,6 +141,7 @@ class TranSparseModel(object):
             #         tf.summary.histogram(var.op.name + '/gradients', grad)
             train_op = optimizer.apply_gradients(mask_grad_val, global_step)
 
+            self.lr = lr
             self.global_step = global_step
             self.loss = loss
             self.optimizer = optimizer
@@ -172,6 +176,19 @@ class TranSparseModel(object):
 
             with tf.control_dependencies([h_norm_op, t_norm_op, neg_norm_op, r_norm_op]):
                 return tf.no_op(name='norm_op')
+
+    def _norm_projected(self):
+        (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
+        return  norm_prjct_module.norm_prjct_op(self.Mh_all, 
+                                                self.Mt_all,
+                                                self.relations,
+                                                self.entitys,
+                                                self.mask_h_all,
+                                                self.mask_t_all,
+                                                self.lr,
+                                                rids, hids, tids, 
+                                                n_hids, n_tids, flag_heads
+                                                )
 
     def _norm_one_example(self, example):
         continue_ = tf.Variable(True, trainable=False, dtype=tf.bool)
@@ -211,7 +228,7 @@ class TranSparseModel(object):
             with tf.control_dependencies([tf.assign(continue_, True)]):
                 return tf.while_loop(lambda x: x, body, [continue_])
 
-    def _norm_projected(self):
+    def _norm_projected_v1(self):
         '''
         Slow!
         High accuracy!!
