@@ -1,6 +1,7 @@
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 import numpy as np
+import os
 
 op_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'norm_prjct_op.so')
 norm_prjct_module = tf.load_op_library(op_path)
@@ -178,6 +179,10 @@ class TranSparseModel(object):
                 return tf.no_op(name='norm_op')
 
     def _norm_projected(self):
+        '''
+        Fast and high accuracy!
+        About 3.5s per epoch.
+        '''
         (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
         return  norm_prjct_module.norm_prjct_op(self.Mh_all, 
                                                 self.Mt_all,
@@ -230,7 +235,7 @@ class TranSparseModel(object):
 
     def _norm_projected_v1(self):
         '''
-        Slow!
+        Slow! about 120s per epoch.
         High accuracy!!
         '''
         with tf.name_scope('Projected'):
@@ -250,7 +255,7 @@ class TranSparseModel(object):
 
     def _norm_projected_v0(self):
         '''
-        Fast!
+        Fast! about 15s per epoch.
         Low accuracy!!
         '''
         flag = tf.Variable(True, trainable=False, dtype=tf.bool)

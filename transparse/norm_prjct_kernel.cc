@@ -9,18 +9,6 @@
 // #include "tensorflow/core/platform/thread_annotations.h"
 // #include "tensorflow/core/util/guarded_philox_random.h"
 
-// ************************************************************************************************************
-// NOTE: Useage of `tensorflow::Tensor` and `Eigen::Tensor`
-// [tensorflow::Tensor](https://www.tensorflow.org/api_docs/cc/class/tensorflow/tensor)
-// [Eigen::Tensor](https://bitbucket.org/eigen/eigen/src/677c9f1577810e869f4f09881cabc3e503a810c1/unsupported/Eigen/CXX11/src/Tensor/README.md)
-// [Eigen::Tensor](http://eigen.tuxfamily.org/dox/unsupported/group__CXX11__Tensor__Module.html)
-// [TensorChippingOp](https://eigen.tuxfamily.org/dox-devel/unsupported/TensorChipping_8h_source.html)
-// [convert 2-D tensor to matrix](http://stackoverflow.com/questions/39475356/how-to-change-2d-eigentensor-to-eigenmatrix)
-// [Eigen::Map] (http://eigen.tuxfamily.org/dox/classEigen_1_1Map.html)
-// [Eigen::Matrix](http://eigen.tuxfamily.org/dox/group__TutorialMatrixClass.html)
-// [Eigen::Matrix Arithmetic](http://eigen.tuxfamily.org/dox/group__TutorialMatrixArithmetic.html)
-// ************************************************************************************************************
-
 
 // EigenTensorMap is same as `tensorflow::TTypes<T, NDIMS>::Tensor` 
 // defined in "tensorflow/core/framework/tensor_types.h"
@@ -30,7 +18,7 @@ using EigenTensorMap = Eigen::TensorMap<Eigen::Tensor<T, NDIMS, Eigen::RowMajor,
 
 template<typename T>
 using EigenMatrixMap = Eigen::Map<
-                        const Eigen::Matrix<
+                        /*const*/ Eigen::Matrix<
                                   T,           /* scalar element type */
                                   Eigen::Dynamic,  /* num_rows is a run-time value */
                                   Eigen::Dynamic,  /* num_cols is a run-time value */
@@ -39,6 +27,8 @@ using EigenMatrixMap = Eigen::Map<
 template<typename T, int NDIMS = 2>
 using EigenTensor = Eigen::Tensor<T, NDIMS, Eigen::RowMajor, Eigen::DenseIndex>;
 
+template<typename T>
+using EigenMatrix = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
 
 
 
@@ -53,6 +43,7 @@ class NormPrjctOp : public OpKernel {
   // ~NormPrjctOp() { delete sampler_; }
 
   void Compute(OpKernelContext* ctx) override {
+
     Tensor Mh_all = ctx->mutable_input(0, false);
     // OP_REQUIRES(ctx, TensorShapeUtils::IsMatrixOrHigher(Mh_all),
     //             errors::InvalidArgument("Must be a matrix or higher"));
@@ -94,12 +85,25 @@ class NormPrjctOp : public OpKernel {
     //             erros::InvalidArgument("rids.shape == flag_heads.shape"))
 
 
-    auto TMh_all = Mh_all.tensor<float>(); // r x m x m
-    auto TMt_all = Mt_all.tensor<float>(); // r x m x m
-    auto Trelations = relations.tensor<float>(); // r x m x 1
-    auto Tentitys = entitys.tensor<float>();     // e x m x 1
-    auto Tmask_h_all = mask_h_all.tensor<float>();// r x m x m
-    auto Tmask_t_all = mask_t_all.tensor<float>();// r x m x m
+
+  // TTypes<int32, 1>::ConstTensor Trids = rids.flat<int32>(); // b
+  // TTypes<float, 3>::Tensor Trelations = relations.tensor<float, 3>(); // r x m x 1
+  
+  // int rid = Trids(0);
+  // std::cout << "rid: " << Trids(0) << std::endl;
+      
+  // EigenTensor<float> Tr = Trelations.chip(rid, 0);
+
+  // std::cout << "r: " << Tr << std::endl;
+  // const auto& MTr = EigenMatrixMap<float>(Tr.data(), Tr.dimension(0), Tr.dimension(1));
+  // std::cout << "r: " << MTr << std::endl;
+      
+    auto TMh_all = Mh_all.tensor<float, 3>(); // r x m x m
+    auto TMt_all = Mt_all.tensor<float, 3>(); // r x m x m
+    auto Trelations = relations.tensor<float, 3>(); // r x m x 1
+    auto Tentitys = entitys.tensor<float, 3>();     // e x m x 1
+    auto Tmask_h_all = mask_h_all.tensor<float, 3>();// r x m x m
+    auto Tmask_t_all = mask_t_all.tensor<float, 3>();// r x m x m
     auto Tlr = lr.scalar<float>()();
     auto Trids = rids.flat<int32>(); // b 
     auto Thids = hids.flat<int32>(); // b 
@@ -108,7 +112,7 @@ class NormPrjctOp : public OpKernel {
     auto Tn_tids = n_tids.flat<int32>(); // b 
     auto Tflag_heads = flag_heads.flat<bool>(); // b 
 
-    const int64 batch_size = rids.dim_size(0);
+    const int64 batch_size = 1;//rids.dim_size(0);
 
     for (int64 i = 0; i < batch_size; ++i){
       int rid = Trids(i);
@@ -118,29 +122,42 @@ class NormPrjctOp : public OpKernel {
       int n_tid = Tn_tids(i);
       bool flag_head = Tflag_heads(i);
 
-      auto r = EigenMatrixMap<float>(Trelations.chip(rid, 0));
-      auto h = EigenMatrixMap<float>(Tentitys.chip(hid, 0));
-      auto t = EigenMatrixMap<float>(Tentitys.chip(tid, 0));
-      auto neg_h = EigenMatrixMap<float>(Tentitys.chip(n_hid, 0));
-      auto neg_t = EigenMatrixMap<float>(Tentitys.chip(n_tid, 0));
-      auto Mh = EigenMatrixMap<float>(TMh_all.chip(rid, 0));
-      auto Mt = EigenMatrixMap<float>(TMt_all.chip(rid, 0));
-      auto mask_h = EigenMatrixMap<float>(Tmask_h_all.chip(rid, 0));
-      auto mask_t = EigenMatrixMap<float>(Tmask_t_all.chip(rid, 0));
+      EigenTensor<float> r_chip = Trelations.chip(rid, 0);
+      EigenTensor<float> h_chip = Tentitys.chip(hid, 0);
+      EigenTensor<float> t_chip = Tentitys.chip(tid, 0);
+      EigenTensor<float> neg_h_chip = Tentitys.chip(n_hid, 0);
+      EigenTensor<float> neg_t_chip = Tentitys.chip(n_tid, 0);
+      EigenTensor<float> Mh_chip = TMh_all.chip(rid, 0);
+      EigenTensor<float> Mt_chip = TMt_all.chip(rid, 0);
+      EigenTensor<float> mask_h_chip = Tmask_h_all.chip(rid, 0);
+      EigenTensor<float> mask_t_chip = Tmask_t_all.chip(rid, 0);
+
+
+      auto r = EigenMatrixMap<float>(r_chip.data(), r_chip.dimension(0), r_chip.dimension(1));
+      auto h = EigenMatrixMap<float>(h_chip.data(), h_chip.dimension(0), h_chip.dimension(1));
+      auto t = EigenMatrixMap<float>(t_chip.data(), t_chip.dimension(0), t_chip.dimension(1));
+      auto neg_h = EigenMatrixMap<float>(neg_h_chip.data(), neg_h_chip.dimension(0), neg_h_chip.dimension(1));
+      auto neg_t = EigenMatrixMap<float>(neg_t_chip.data(), neg_t_chip.dimension(0), neg_t_chip.dimension(1));
+      auto Mh = EigenMatrixMap<float>(Mh_chip.data(), Mh_chip.dimension(0), Mh_chip.dimension(1));
+      auto Mt = EigenMatrixMap<float>(Mt_chip.data(), Mt_chip.dimension(0), Mt_chip.dimension(1));
+      auto mask_h = EigenMatrixMap<float>(mask_h_chip.data(), mask_h_chip.dimension(0), mask_h_chip.dimension(1));
+      auto mask_t = EigenMatrixMap<float>(mask_t_chip.data(), mask_t_chip.dimension(0), mask_t_chip.dimension(1));
+
+      float lambda = 2 * lr.scalar<float>()();
 
       while(true){
-        auto h_p = Mh * h;
-        auto t_p = Mt * t;
+        EigenMatrix<float> h_p = Mh * h;
+        EigenMatrix<float> t_p = Mt * t;
 
-        auto nid = n_hid;
-        auto neg_p = Mh * neg_h;
+        int nid = n_hid;
+        EigenMatrix<float> neg_p = Mh * neg_h;
         if(!flag_head){
-          nid = n_tid;        
+          nid = n_tid;         
           neg_p = Mt * neg_t;
         }
-        float norm_h_p   = h_p.pow(2).sum()() - 1.;
-        float norm_t_p   = t_p.pow(2).sum()() - 1.;
-        float norm_neg_p = neg_p.pow(2).sum()() - 1.;
+        float norm_h_p   = h_p.array().square().sum() - 1.;
+        float norm_t_p   = t_p.array().square().sum() - 1.;
+        float norm_neg_p = neg_p.array().square().sum() - 1.;
         float loss = (norm_h_p>0. ? norm_h_p : 0.) +
                      (norm_t_p>0. ? norm_t_p : 0.) +
                      (norm_neg_p>0. ? norm_neg_p : 0.);
@@ -149,40 +166,44 @@ class NormPrjctOp : public OpKernel {
           // y = Wx
           // dy/dx = 2(Wx)'W
           // dy/dW = 2(Wx)x'
+          
           if (norm_h_p > 0.){
-            Mh -= lr * 2 * (h_p * h.transpose()).cwiseProduct(mask_h);
-            h -= lr * 2 * h_p.transpose() * Mh;
+            Mh -= lambda * (h_p * h.transpose()).cwiseProduct(mask_h);
+            h -= lambda * Mh.transpose() * h_p;
           }
+          
           if (norm_t_p > 0.){
-            Mt -= lr * 2 * (t_p * t.transpose()).cwiseProduct(mask_t);
-            t -= lr * 2 * t_p.transpose() * Mt;
-          }
+            Mt -= lambda * (t_p * t.transpose()).cwiseProduct(mask_t);
+            t -= lambda * Mt.transpose() * t_p;
+          }           
 
           if (norm_neg_p > 0.){
             if(flag_head){
-              Mh -= lr * 2 * (neg_p * neg_h.transpose()).cwiseProduct(mask_h);
-              neg_h -= lr * 2 * neg_p.transpose() * Mh;
+              Mh -= lambda * (neg_p * neg_h.transpose()).cwiseProduct(mask_h);
+              neg_h -= lambda * Mh.transpose() * neg_p;
             }else{
-              Mt -= lr * 2 * (neg_p * neg_t.transpose()).cwiseProduct(mask_t);
-              neg_t -= lr * 2 * neg_p.transpose() * Mt;
+              Mt -= lambda * (neg_p * neg_t.transpose()).cwiseProduct(mask_t);
+              neg_t -= lambda * Mt.transpose() * neg_p;
             }
            
           }
+          // std::cout << lambda << std::endl;
+          // break;
           
         }else{
           break;
         } // if loss > 0.
       }// while true
     
-	  Tentitys.chip(hid, 0) = EigenTensorMap<float>(h.data(), Tentitys.chip(hid, 0).dimensions());
-	  Tentitys.chip(tid, 0) = EigenTensorMap<float>(t.data(), Tentitys.chip(tid, 0).dimensions());
-	  if(flag_head()){
-	    	Tentitys.chip(n_hid, 0) = EigenTensorMap<float>(neg_h.data(), Tentitys.chip(n_hid, 0).dimensions());
-      }else{
-        Tentitys.chip(n_tid, 0) = EigenTensorMap<float>(neg_t.data(), Tentitys.chip(n_tid, 0).dimensions());
-    }
-	  TMh_all.chip(rid, 0) = EigenTensorMap<float>(Mh.data(), TMh_all.chip(rid, 0).dimensions());
-	  TMt_all.chip(rid, 0) = EigenTensorMap<float>(Mt.data(), TMt_all.chip(rid, 0).dimensions());
+      Tentitys.chip(hid, 0) = EigenTensorMap<float>(h.data(), h_chip.dimensions());
+      Tentitys.chip(tid, 0) = EigenTensorMap<float>(t.data(), t_chip.dimensions());
+      if(flag_head){
+          Tentitys.chip(n_hid, 0) = EigenTensorMap<float>(neg_h.data(), neg_h_chip.dimensions());
+        }else{
+          Tentitys.chip(n_tid, 0) = EigenTensorMap<float>(neg_t.data(), neg_t_chip.dimensions());
+      }
+      TMh_all.chip(rid, 0) = EigenTensorMap<float>(Mh.data(), Mh_chip.dimensions());
+      TMt_all.chip(rid, 0) = EigenTensorMap<float>(Mt.data(), Mt_chip.dimensions());
     }// for batch_size    
   }
 
