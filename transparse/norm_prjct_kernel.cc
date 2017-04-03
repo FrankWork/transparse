@@ -163,8 +163,8 @@ class NormPrjctOp : public OpKernel {
                      (norm_neg_p>0. ? norm_neg_p : 0.);
 
         if (loss > 0.){
-          // y = Wx
-          // dy/dx = 2(Wx)'W
+          // y = loss
+          // dy/dx = 2W'(Wx)
           // dy/dW = 2(Wx)x'
           
           if (norm_h_p > 0.){
