@@ -1,9 +1,0 @@
-__pycache__/
-output*/
-src/
-tmp*
-multithread.py
-distributed.py
-.ipynb_checkpoints/
-.vscode/
-transparse
