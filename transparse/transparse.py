@@ -5,6 +5,7 @@ import numpy as np
 import os
 import sys
 import threading
+import queue
 
 import data_utils
 import transparse_model
@@ -21,13 +22,15 @@ tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("margin", 4, "Used in margin-based loss function.")
 tf.app.flags.DEFINE_integer("relation_num", 11,
                             "Lelation number and sparse degree of matrix.")
-tf.app.flags.DEFINE_integer("epochs", 101,
-                            "How many epochs to run.")
-tf.app.flags.DEFINE_integer("epochs_per_eval", 20,
-                            "How many training epochs write parameters to file.")
 tf.app.flags.DEFINE_integer("batch_size", 1000,
                             "Size of the mini-batch.")
 tf.app.flags.DEFINE_integer("embedding_size", 20, "embedding_size")
+tf.app.flags.DEFINE_integer("epochs", 1000,
+                            "How many epochs to run.")
+tf.app.flags.DEFINE_integer("epochs_per_eval", 20,
+                            "How many training epochs write parameters to file.")
+tf.app.flags.DEFINE_integer("thread_num", 12,
+                            "How many training threads to run.")
 tf.app.flags.DEFINE_boolean("use_bern", True,
                             "Bernoulli or uniform distribution.")
 tf.app.flags.DEFINE_boolean("l1_norm", True, "L1 Norm.")
@@ -37,7 +40,7 @@ tf.app.flags.DEFINE_boolean("debug", False,
                             "Set to True for test.")
 tf.app.flags.DEFINE_boolean("random_embed", False,
                             "Set to True for random entity embeddings.")
-tf.app.flags.DEFINE_boolean("multi_thread", False,
+tf.app.flags.DEFINE_boolean("mt", False,
                             "Set to True for multithreading training.")
 
 FLAGS = tf.app.flags.FLAGS
@@ -86,7 +89,9 @@ def train():
     data_mgr, model = create_model()
     saver = model.saver
     # Config to turn on JIT compilation
-    config = tf.ConfigProto()
+    # NUM_THREADS = 96
+    # config = tf.ConfigProto(intra_op_parallelism_threads=NUM_THREADS)
+    config = tf.ConfigProto()    
     config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
 
     with tf.Session(config=config) as session:
@@ -127,13 +132,13 @@ def train():
             sys.stdout.flush()
 
 
-epoch_loss = 0
 
 def train_multi_thread():
     data_mgr, model = create_model()
     saver = model.saver
     # Config to turn on JIT compilation
-    # NUM_THREADS = 48
+    # NUM_THREADS = 24
+    # config = tf.ConfigProto(intra_op_parallelism_threads=NUM_THREADS)
     config = tf.ConfigProto()
     config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
     with tf.Session(config=config) as session:
@@ -147,54 +152,101 @@ def train_multi_thread():
           saver.restore(session, ckpt.model_checkpoint_path)
         else:
           print("Created model with fresh parameters.")
-          session.run(tf.global_variables_initializer())        
+          session.run(tf.global_variables_initializer())
         
-        lock = threading.Lock()
+        # lock = threading.Lock()
+        # result_queue = queue.Queue()
         def _thread_body(coord):
-            global epoch_loss
-            initial_step, = session.run([model.global_step])
+            total_steps = FLAGS.epochs * data_mgr.steps_per_epoch
+            total_steps -= total_steps % FLAGS.thread_num
+            steps = total_steps // FLAGS.thread_num
+            # print('steps: %d' % steps)
+            # initial_step, = session.run([model.global_step])
+            step_processed = 0
             while not coord.should_stop():
-                step, = session.run([model.global_step])
-                if step - initial_step >= data_mgr.steps_per_epoch:
-                    coord.request_stop()
-
                 inputs = data_mgr.get_batch()
-                summary, batch_loss = model.train_minibatch(session, inputs)
+                _ = model.train_minibatch_multithread(session, inputs)
+                step_processed += 1
+                # result_queue.put(summary_and_loss)
+                # epoch = (step - initial_step) // data_mgr.steps_per_epoch
+                if step_processed >= steps:
+                    print('step_processed: %d' % step_processed)
+                    # coord.request_stop() # all threads stop!!!!
+                    break
 
-                with lock:
-                    train_writer.add_summary(summary, batch_loss)
-                    epoch_loss += batch_loss
         
-        global epoch_loss
-        for epoch in range(FLAGS.epochs):
-            if epoch % FLAGS.epochs_per_eval == 0 :
-                Mh_all, Mt_all, relations, entitys = model.get_matrix_and_embeddings(session)
-                write_parameters_to_file(Mh_all, Mt_all, relations, entitys, epoch)
-                # eval(FLAGS.train_dir, epoch)           
+        initial_step, = session.run([model.global_step])
+        # print('initial_step: %d' % initial_step)
+        workers = []
+        coord = tf.train.Coordinator()
+        for i in range(FLAGS.thread_num):
+            t = threading.Thread(target=_thread_body, args=(coord, ))
+            t.start()
+            workers.append(t)
+        
+        total_steps = FLAGS.epochs * data_mgr.steps_per_epoch
+        total_steps -= total_steps % FLAGS.thread_num
+        print('total_steps: %d' % total_steps)
+        last_step, last_time = initial_step, time.time()
+        while True:
+            time.sleep(3)
 
-            start_time = time.time()
-
-            workers = []
-            coord = tf.train.Coordinator()
-            threads  = 48
-            for i in range(threads):
-                t = threading.Thread(target=_thread_body, args=(coord, ))
-                t.start()
-                workers.append(t)
+            step, = session.run([model.global_step])
+            now = time.time()
+            epoch = (step - initial_step) // data_mgr.steps_per_epoch
+            if (step - initial_step) >= total_steps:
+                break
             
+            if (step == last_step):
+                continue
+            time_per_step = (now - last_time) / (step - last_step)
+            batch_time = time_per_step * data_mgr.steps_per_epoch 
+            print ("epoch %d step %d batch_time %.2f" % (epoch, step,  batch_time))
+            sys.stdout.flush()
+            last_step, last_time = step, now
+            
+        coord.join(workers)
+        Mh_all, Mt_all, relations, entitys = model.get_matrix_and_embeddings(session)
+        write_parameters_to_file(Mh_all, Mt_all, relations, entitys, 0)
+        # 12 threads, 20 epochs
+        # real	0m38.310s
+        # user	2m20.574s
+        # sys	0m53.638s
+        # 0.859730652504
+
+
+        # for epoch in range(FLAGS.epochs):
+        #     start_time = time.time()
+        #     initial_step, = session.run([model.global_step])
+
+            
+                
+
+                # if epoch % FLAGS.epochs_per_eval == 0 :
+                # Mh_all, Mt_all, relations, entitys = model.get_matrix_and_embeddings(session)
+                # write_parameters_to_file(Mh_all, Mt_all, relations, entitys, epoch)
+                # # eval(FLAGS.train_dir, epoch)     
+
+
+                # epoch_time = (time.time() - start_time)
+                # # Print statistics for the previous epoch.
+                
+                # #     train_writer.add_summary(summary, batch_loss)
+                # #     epoch_loss += batch_loss
+
+                # print ("epoch %d epoch-time %.2f loss %.2f" % (epoch, epoch_time, epoch_loss))
+                # epoch_loss =0
+                
+                # # Save checkpoint
+                # checkpoint_path = os.path.join(FLAGS.train_dir, "transparse.ckpt")
+                # saver.save(session, checkpoint_path, global_step=model.global_step)
+                # sys.stdout.flush()
+
+
             # for t in workers:
             #     t.join() # wait the threads to finish
-            coord.join(workers)
 
-            epoch_time = (time.time() - start_time)
-            # Print statistics for the previous epoch.
-            print ("epoch %d epoch-time %.2f loss %.2f" % (epoch, epoch_time, epoch_loss))
-            epoch_loss =0
             
-            # Save checkpoint
-            checkpoint_path = os.path.join(FLAGS.train_dir, "transparse.ckpt")
-            saver.save(session, checkpoint_path, global_step=model.global_step)
-            sys.stdout.flush()
 
 def write_parameters_to_file(Mh, Mt, relations, entitys, epoch):
     """
@@ -297,7 +349,7 @@ def main(_):
     # elif FLAGS.eval:
     #     print('write_parameters_for_eval:')
     #     write_parameters_for_eval()
-    elif FLAGS.multi_thread:
+    elif FLAGS.mt:
         train_multi_thread()
     else:
         train()

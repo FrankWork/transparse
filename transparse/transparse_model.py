@@ -181,7 +181,7 @@ class TranSparseModel(object):
     def _norm_projected_cxx(self):
         '''
         Fast and high accuracy!
-        About 3.5s per epoch.
+        About 4.9s per epoch, multithread training 3.4s per epoch.
         '''
         (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
         return  norm_prjct_module.norm_prjct_op(self.Mh_all, 
@@ -311,6 +311,17 @@ class TranSparseModel(object):
                      feed_dict=feed_dict)
         
         return summary, loss_val
+    def train_minibatch_multithread(self, session, inputs):
+        rids, hids, tids, n_hids, n_tids, flag_heads = self.inputs
+        rids_val, hids_val, tids_val, n_hids_val, n_tids_val, flag_heads_val = inputs
+        feed_dict = {rids:rids_val, hids:hids_val, tids:tids_val,
+                     n_hids:n_hids_val, n_tids:n_tids_val,
+                     flag_heads:flag_heads_val}
 
+        _, step, _, _ = session.run([
+                     self.train_op, self.global_step, self.norm_op, self.norm_prjct_op],
+                     feed_dict=feed_dict)
+        
+        return step
     def get_matrix_and_embeddings(self, session):
         return session.run([self.Mh_all, self.Mt_all, self.relations, self.entitys])
