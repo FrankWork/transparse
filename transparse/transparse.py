@@ -4,6 +4,7 @@ import time
 import numpy as np
 import os
 import sys
+import threading
 
 import data_utils
 import transparse_model
@@ -20,11 +21,11 @@ tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("margin", 4, "Used in margin-based loss function.")
 tf.app.flags.DEFINE_integer("relation_num", 11,
                             "Lelation number and sparse degree of matrix.")
-tf.app.flags.DEFINE_integer("epochs", 3,
+tf.app.flags.DEFINE_integer("epochs", 101,
                             "How many epochs to run.")
-tf.app.flags.DEFINE_integer("epochs_per_eval", 1,
+tf.app.flags.DEFINE_integer("epochs_per_eval", 20,
                             "How many training epochs write parameters to file.")
-tf.app.flags.DEFINE_integer("batch_size", 100,
+tf.app.flags.DEFINE_integer("batch_size", 1000,
                             "Size of the mini-batch.")
 tf.app.flags.DEFINE_integer("embedding_size", 20, "embedding_size")
 tf.app.flags.DEFINE_boolean("use_bern", True,
@@ -125,10 +126,14 @@ def train():
             saver.save(session, checkpoint_path, global_step=model.global_step)
             sys.stdout.flush()
 
+
+epoch_loss = 0
+
 def train_multi_thread():
     data_mgr, model = create_model()
     saver = model.saver
     # Config to turn on JIT compilation
+    # NUM_THREADS = 48
     config = tf.ConfigProto()
     config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
     with tf.Session(config=config) as session:
@@ -142,28 +147,54 @@ def train_multi_thread():
           saver.restore(session, ckpt.model_checkpoint_path)
         else:
           print("Created model with fresh parameters.")
-          session.run(tf.global_variables_initializer())
+          session.run(tf.global_variables_initializer())        
+        
+        lock = threading.Lock()
+        def _thread_body(coord):
+            global epoch_loss
+            initial_step, = session.run([model.global_step])
+            while not coord.should_stop():
+                step, = session.run([model.global_step])
+                if step - initial_step >= data_mgr.steps_per_epoch:
+                    coord.request_stop()
 
-        # for epoch in range(FLAGS.epoch):
-        #     start_time = time.time()
-        #     epoch_loss = 0
-        #     # num_batches is how many steps in one epoch to train
-        #     for _ in range(data_mgr.num_batches):
-        #         rids, hids, tids, n_hids, n_tids, flag_heads = data_mgr.get_batch()
-        #         summary, batch_loss = model.train_minibatch(session, rids, hids,
-        #                                     tids, n_hids, n_tids, flag_heads)
-        #         # print(batch_loss)
-        #         train_writer.add_summary(summary, batch_loss)
-        #         epoch_loss += batch_loss# / data_mgr.num_batches
-        #
-        #     epoch_time = (time.time() - start_time)
-        #     # Print statistics for the previous epoch.
-        #     print ("epoch %d epoch-time %.2f loss %.2f" % (epoch,
-        #                      epoch_time, epoch_loss))
-        #     # Save checkpoint
-        #     checkpoint_path = os.path.join(FLAGS.train_dir, "transparse.ckpt")
-        #     saver.save(session, checkpoint_path, global_step=model.global_step)
-        #     sys.stdout.flush()
+                inputs = data_mgr.get_batch()
+                summary, batch_loss = model.train_minibatch(session, inputs)
+
+                with lock:
+                    train_writer.add_summary(summary, batch_loss)
+                    epoch_loss += batch_loss
+        
+        global epoch_loss
+        for epoch in range(FLAGS.epochs):
+            if epoch % FLAGS.epochs_per_eval == 0 :
+                Mh_all, Mt_all, relations, entitys = model.get_matrix_and_embeddings(session)
+                write_parameters_to_file(Mh_all, Mt_all, relations, entitys, epoch)
+                # eval(FLAGS.train_dir, epoch)           
+
+            start_time = time.time()
+
+            workers = []
+            coord = tf.train.Coordinator()
+            threads  = 48
+            for i in range(threads):
+                t = threading.Thread(target=_thread_body, args=(coord, ))
+                t.start()
+                workers.append(t)
+            
+            # for t in workers:
+            #     t.join() # wait the threads to finish
+            coord.join(workers)
+
+            epoch_time = (time.time() - start_time)
+            # Print statistics for the previous epoch.
+            print ("epoch %d epoch-time %.2f loss %.2f" % (epoch, epoch_time, epoch_loss))
+            epoch_loss =0
+            
+            # Save checkpoint
+            checkpoint_path = os.path.join(FLAGS.train_dir, "transparse.ckpt")
+            saver.save(session, checkpoint_path, global_step=model.global_step)
+            sys.stdout.flush()
 
 def write_parameters_to_file(Mh, Mt, relations, entitys, epoch):
     """
@@ -211,24 +242,6 @@ def write_parameters_to_file(Mh, Mt, relations, entitys, epoch):
                     f.write('%.6f ' % Mt[r][row][col])
                 f.write('\n')
 
-# def write_parameters_for_eval():
-#     path = FLAGS.train_dir
-#
-#     data_mgr, model = create_model()
-#     saver = model.saver
-#
-#     with tf.Session() as session:
-#         print("Created model with fresh parameters.")
-#         session.run(tf.global_variables_initializer())
-#         Mh, Mt, relations, entitys = model.get_matrix_and_embeddings(session)
-#         write_parameters_to_file(Mh, Mt, relations, entitys, 0)
-#
-#         ckpt = tf.train.get_checkpoint_state(path)
-#         if ckpt and tf.train.checkpoint_exists(ckpt.model_checkpoint_path):
-#             print("Reading model parameters from %s" % ckpt.model_checkpoint_path)
-#             saver.restore(session, ckpt.model_checkpoint_path)
-#             Mh, Mt, relations, entitys = model.get_matrix_and_embeddings(session)
-#             write_parameters_to_file(Mh, Mt, relations, entitys, 999)
 
 def test_small_model():
     relation_num = 2

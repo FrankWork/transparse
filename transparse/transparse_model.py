@@ -18,7 +18,7 @@ class TranSparseModel(object):
         with tf.control_dependencies([self.train_op]):
             self.norm_op = self._norm()
             with tf.control_dependencies([self.norm_op]):
-                self.norm_prjct_op = self._norm_projected()
+                self.norm_prjct_op = self._norm_projected_cxx()
 
         self.merged = tf.summary.merge_all()
         self.saver = tf.train.Saver()
@@ -118,8 +118,8 @@ class TranSparseModel(object):
             tf.summary.scalar('loss', loss)
 
         with tf.name_scope('Optimizer'):
-            global_step = tf.Variable(0, name='global_step',trainable=False)
-            optimizer = tf.train.GradientDescentOptimizer(lr)
+            global_step = tf.Variable(0, name='global_step', trainable=False)
+            optimizer = tf.train.GradientDescentOptimizer(lr, use_locking=True)
 
             var_list = [self.Mh_all, self.Mt_all, self.relations, self.entitys]
             grad_val = optimizer.compute_gradients(loss, var_list)
@@ -178,7 +178,7 @@ class TranSparseModel(object):
             with tf.control_dependencies([h_norm_op, t_norm_op, neg_norm_op, r_norm_op]):
                 return tf.no_op(name='norm_op')
 
-    def _norm_projected(self):
+    def _norm_projected_cxx(self):
         '''
         Fast and high accuracy!
         About 3.5s per epoch.
@@ -309,6 +309,7 @@ class TranSparseModel(object):
         summary, _, _, _, loss_val = session.run([self.merged,
                      self.train_op, self.norm_op, self.norm_prjct_op, self.loss],
                      feed_dict=feed_dict)
+        
         return summary, loss_val
 
     def get_matrix_and_embeddings(self, session):

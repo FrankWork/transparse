@@ -102,5 +102,5 @@ def eval(path, i):
 
     output_result(dev_triples, dev_score, test_triples, test_score, relation_list)
 
-for epoch in range(3):
+for epoch in [0, 20, 40, 60, 80, 100]:
     eval('output/', epoch)
