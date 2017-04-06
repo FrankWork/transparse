@@ -1,6 +1,7 @@
 import os
 import random
-
+import threading
+import queue
 # DATA_PATH + 'set_num_l.txt'
 # DATA_PATH + 'set_num_r.txt'
 
@@ -24,6 +25,20 @@ class DataMgr(object):
             self._compute_prob_of_replace_head()
         self._load_entity_and_relation_embeddings(entity2vec_data, relation2vec_data)
         self._load_sparse_index(sparse_index_head_data, sparse_index_tail_data)
+
+        # multithread feed
+        self.lock = threading.Lock()
+        self.batch_buf = queue.Queue()
+        self.buf_sz = 72
+        # self.buf_idx = buf_sz
+        for i in range(self.buf_sz):
+            batch = self.get_batch()
+            self.batch_buf.put(batch)
+            if i == self.buf_sz-1:
+                print('batch_buf init finish.')
+            # buf_idx = i
+
+
 
     def _load_entity_and_relation_set(self, entity2id_data, relation2id_data):
         # load entity set
@@ -183,6 +198,15 @@ class DataMgr(object):
             n_tids.append(nt)
             flag_heads.append(replace_head)
         return rids, hids, tids, n_hids, n_tids, flag_heads
+    
+    def get_batch_multi_thread(self):
+        with self.lock:
+            batch = self.batch_buf.get()
+            if self.batch_buf.empty():
+                for i in range(self.buf_sz):
+                    batch_ = self.get_batch()
+                    self.batch_buf.put(batch_)
+            return batch
 
     def _generate_negative_triplet(self, pos_triplet):
         hid, rid, tid =  pos_triplet

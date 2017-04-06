@@ -25,7 +25,7 @@ tf.app.flags.DEFINE_integer("relation_num", 11,
 tf.app.flags.DEFINE_integer("batch_size", 1000,
                             "Size of the mini-batch.")
 tf.app.flags.DEFINE_integer("embedding_size", 20, "embedding_size")
-tf.app.flags.DEFINE_integer("epochs", 1000,
+tf.app.flags.DEFINE_integer("epochs", 10,
                             "How many epochs to run.")
 tf.app.flags.DEFINE_integer("epochs_per_eval", 20,
                             "How many training epochs write parameters to file.")
@@ -134,12 +134,16 @@ def train():
 
 
 def train_multi_thread():
+    '''
+    only use 7 cores on a 24 cores machine!!!
+    about 1.5s per epoch
+    '''
     data_mgr, model = create_model()
     saver = model.saver
     # Config to turn on JIT compilation
-    # NUM_THREADS = 24
-    # config = tf.ConfigProto(intra_op_parallelism_threads=NUM_THREADS)
-    config = tf.ConfigProto()
+    NUM_THREADS = 24
+    config = tf.ConfigProto(intra_op_parallelism_threads=NUM_THREADS, inter_op_parallelism_threads=NUM_THREADS)
+    # config = tf.ConfigProto()
     config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
     with tf.Session(config=config) as session:
         print('*'*40)
@@ -164,7 +168,7 @@ def train_multi_thread():
             # initial_step, = session.run([model.global_step])
             step_processed = 0
             while not coord.should_stop():
-                inputs = data_mgr.get_batch()
+                inputs = data_mgr.get_batch_multi_thread() # it does not improve the performance
                 _ = model.train_minibatch_multithread(session, inputs)
                 step_processed += 1
                 # result_queue.put(summary_and_loss)
@@ -198,7 +202,7 @@ def train_multi_thread():
                 break
             
             if (step == last_step):
-                continue
+                break
             time_per_step = (now - last_time) / (step - last_step)
             batch_time = time_per_step * data_mgr.steps_per_epoch 
             print ("epoch %d step %d batch_time %.2f" % (epoch, step,  batch_time))
