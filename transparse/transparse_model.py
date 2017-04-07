@@ -7,21 +7,47 @@ op_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'norm_prjct_
 norm_prjct_module = tf.load_op_library(op_path)
 
 class TranSparseModel(object):
-    def __init__(self, margin, lr, l1_norm,
+    def __init__(self, ps_hosts, worker_hosts, job_name, task_index,
+                margin, lr, l1_norm,
                 r_num, e_num, # relation_num, entity_num 
                 e_sz, b_sz, # embedding_size, batch_size 
                 e_embed, r_embed, # pre-trained embeddings 
                 mask_h_idx, mask_t_idx):
 
-        self._global_tensor(r_num, e_num, e_sz, b_sz, e_embed, r_embed, mask_h_idx, mask_t_idx)
-        self.train_op = self._optimize_graph(margin, lr, l1_norm)
-        with tf.control_dependencies([self.train_op]):
-            self.norm_op = self._norm()
-            with tf.control_dependencies([self.norm_op]):
-                self.norm_prjct_op = self._norm_projected_cxx()
+        # Create a cluster from the parameter server and worker hosts.
+        cluster = tf.train.ClusterSpec({"ps": ps_hosts, "worker": worker_hosts})
 
-        self.merged = tf.summary.merge_all()
-        self.saver = tf.train.Saver()
+        # Create and start a server for the local task.
+        server = tf.train.Server(cluster,
+                           job_name=job_name,
+                           task_index=task_index)
+        
+        if job_name == "ps":
+            server.join()
+        elif job_name == "worker":
+            greedy = tf.contrib.training.GreedyLoadBalancingStrategy(len(ps_hosts), tf.contrib.training.byte_size_load_fn)
+            with tf.device(tf.train.replica_device_setter(
+                # worker_device="/job:worker/task:%d" % task_index, 
+                # merge_devices = False,
+                cluster=cluster, 
+                ps_strategy=greedy
+                )):
+                
+                self._global_tensor(r_num, e_num, e_sz, b_sz, e_embed, r_embed, mask_h_idx, mask_t_idx)
+                self.train_op = self._optimize_graph(margin, lr, l1_norm)
+                with tf.control_dependencies([self.train_op]):
+                    self.norm_op = self._norm()
+                    with tf.control_dependencies([self.norm_op]):
+                        with tf.device("/job:worker/task:%d" % task_index):
+                            self.norm_prjct_op = self._norm_projected_cxx()
+                        # print('-'*40)
+                        # print(self.norm_prjct_op)
+
+                self.merged = tf.summary.merge_all()
+                self.server = server
+                self.task_index = task_index
+                
+                # self.saver = tf.train.Saver()
 
     def _global_tensor(self, r_num, e_num, e_sz, b_sz, e_embed, r_embed, mask_h_idx, mask_t_idx):
         with tf.name_scope("Transfer_Matrix"):
@@ -118,7 +144,8 @@ class TranSparseModel(object):
             tf.summary.scalar('loss', loss)
 
         with tf.name_scope('Optimizer'):
-            global_step = tf.Variable(0, name='global_step', trainable=False)
+            global_step = tf.contrib.framework.get_or_create_global_step()
+            # global_step = tf.Variable(0, name='global_step', trainable=False)
             optimizer = tf.train.GradientDescentOptimizer(lr, use_locking=True)
 
             var_list = [self.Mh_all, self.Mt_all, self.relations, self.entitys]
@@ -181,7 +208,6 @@ class TranSparseModel(object):
     def _norm_projected_cxx(self):
         '''
         Fast and high accuracy!
-        About 4.9s per epoch, multithread training 3.4s per epoch.
         '''
         (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
         return  norm_prjct_module.norm_prjct_op(self.Mh_all, 
@@ -195,109 +221,7 @@ class TranSparseModel(object):
                                                 n_hids, n_tids, flag_heads
                                                 )
 
-    def _norm_one_example(self, example):
-        continue_ = tf.Variable(True, trainable=False, dtype=tf.bool)
-        rid, hid, tid, n_hid, n_tid, flag_head = example
-        def body(_):
-            r,h,t,neg_h,neg_t,Mh,Mt,mask_h,mask_t = self._embed_lookup(example)
-            h_p, t_p, neg_h_p, neg_t_p = self._projected_entity(Mh, Mt, h, t, neg_h, neg_t)
-            n_ids = tf.where(flag_head, n_hid, n_tid)
-            neg_p = tf.where(flag_head, neg_h_p, neg_t_p)
-            with tf.name_scope('Loss'):
-                loss = tf.reduce_sum(
-                    tf.maximum(tf.reduce_sum(tf.square(h_p))-1, 0) + \
-                    tf.maximum(tf.reduce_sum(tf.square(t_p))-1, 0) + \
-                    tf.maximum(tf.reduce_sum(tf.square(neg_p))-1, 0)
-                    )
-            with tf.name_scope('Gradients'):
-                grad_val = self.optimizer.compute_gradients(loss)
-                # NOTE: if there is a `NoneType` grad in grad_val pair,
-                # the entire grad_val list is not fetchable.
-                grad_val = [(g,v) for g,v in grad_val if g is not None]
-                gh, vh = grad_val[0]# Mh_all
-                gt, vt = grad_val[1]# Mt_all
-                ge, ve = grad_val[2]# entitys
-                mask_gh, mask_gt = self._mask_grad(gh, gt, mask_h, mask_t)
-
-                mask_grad_val = [(mask_gh, vh),
-                                (mask_gt, vt),
-                                (ge, ve)]
-                norm_prjct_op = self.optimizer.apply_gradients(mask_grad_val)
-            with tf.control_dependencies([norm_prjct_op]):
-                 return tf.cond(tf.greater(loss, 0.) ,
-                                lambda : tf.assign(continue_, True),
-                                lambda : tf.assign(continue_, False)
-                                )
-        with tf.name_scope('Projected'):
-            # Value of flag is True in Epoch 0, and False in other Epoch
-            with tf.control_dependencies([tf.assign(continue_, True)]):
-                return tf.while_loop(lambda x: x, body, [continue_])
-
-    def _norm_projected_v1(self):
-        '''
-        Slow! about 120s per epoch.
-        High accuracy!!
-        '''
-        with tf.name_scope('Projected'):
-            (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
-            batch = tf.stack([rids, hids, tids, n_hids, n_tids], axis=1)
-            b_sz = batch.shape[0] # batch_size
-            i = tf.constant(0)
-            cond = lambda i: tf.less(i, b_sz)
-            def process_one_example(i):
-                rid, hid, tid, n_hid, n_tid = tf.unstack(batch[i])
-                flag_head = flag_heads[i]
-                example = (rid, hid, tid, n_hid, n_tid, flag_head)
-                norm_one_op = self._norm_one_example(example)
-                with tf.control_dependencies([norm_one_op]):
-                    return tf.add(i, 1)
-            return tf.while_loop(cond, process_one_example, [i])
-
-    def _norm_projected_v0(self):
-        '''
-        Fast! about 15s per epoch.
-        Low accuracy!!
-        '''
-        flag = tf.Variable(True, trainable=False, dtype=tf.bool)
-
-        def body(_):
-            (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
-            r,h,t,neg_h,neg_t,Mh,Mt,mask_h,mask_t = self._embed_lookup()
-            h_p, t_p, neg_h_p, neg_t_p = self._projected_entity(Mh, Mt, h, t, neg_h, neg_t)
-            n_ids = tf.where(flag_heads, n_hids, n_tids)
-            neg_p = tf.where(flag_heads, neg_h_p, neg_t_p)
-
-            with tf.name_scope('Loss'):
-                loss = tf.reduce_sum(
-                    tf.maximum(tf.reduce_sum(tf.square(h_p))-1, 0) + \
-                    tf.maximum(tf.reduce_sum(tf.square(t_p))-1, 0) + \
-                    tf.maximum(tf.reduce_sum(tf.square(neg_p))-1, 0)
-                    )
-            with tf.name_scope('Gradients'):
-                grad_val = self.optimizer.compute_gradients(loss)
-                # NOTE: if there is a `NoneType` grad in grad_val pair,
-                # the entire grad_val list is not fetchable.
-                grad_val = [(g,v) for g,v in grad_val if g is not None]
-                gh, vh = grad_val[0]# Mh_all
-                gt, vt = grad_val[1]# Mt_all
-                ge, ve = grad_val[2]# entitys
-                mask_gh, mask_gt = self._mask_grad(gh, gt, mask_h, mask_t)
-
-                avg_grad_val = [(mask_gh, vh),
-                                (mask_gt, vt),
-                                (ge, ve)]
-                norm_prjct_op = self.optimizer.apply_gradients(avg_grad_val)
-
-            with tf.control_dependencies([norm_prjct_op]):
-                 return tf.cond(tf.greater(loss, 0.) ,
-                                lambda : tf.assign(flag, True),
-                                lambda : tf.assign(flag, False)
-                                )
-
-        with tf.name_scope('Projected'):
-            # Value of flag is True in Epoch 0, and False in other Epoch
-            with tf.control_dependencies([tf.assign(flag, True)]):
-                return tf.while_loop(lambda x: x, body, [flag])
+    
 
     def train_minibatch(self, session, inputs):
         rids, hids, tids, n_hids, n_tids, flag_heads = self.inputs

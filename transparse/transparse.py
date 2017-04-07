@@ -25,8 +25,10 @@ tf.app.flags.DEFINE_integer("relation_num", 11,
 tf.app.flags.DEFINE_integer("batch_size", 1000,
                             "Size of the mini-batch.")
 tf.app.flags.DEFINE_integer("embedding_size", 20, "embedding_size")
-tf.app.flags.DEFINE_integer("epochs", 10,
+tf.app.flags.DEFINE_integer("epochs", 50,
                             "How many epochs to run.")
+tf.app.flags.DEFINE_string("job_name", "", "ps or worker")
+tf.app.flags.DEFINE_integer("task_index", "0", "task_index")
 tf.app.flags.DEFINE_integer("epochs_per_eval", 20,
                             "How many training epochs write parameters to file.")
 tf.app.flags.DEFINE_integer("thread_num", 12,
@@ -44,6 +46,12 @@ tf.app.flags.DEFINE_boolean("mt", False,
                             "Set to True for multithreading training.")
 
 FLAGS = tf.app.flags.FLAGS
+# ps_hosts = ['localhost:8088','localhost:8188']
+ps_hosts = ['localhost:8088']
+worker_hosts = ['localhost:8288']
+
+# worker_hosts = ['localhost:8288','localhost:8388','localhost:8488']
+
 
 def create_model():
     data_mgr = data_utils.DataMgr(FLAGS.data_dir, FLAGS.batch_size,
@@ -54,7 +62,10 @@ def create_model():
     # NOTE: for debug
     # data_mgr.steps_per_epoch = 1
 
-    model = transparse_model.TranSparseModel(
+    model = transparse_model.TranSparseModel(ps_hosts,
+                                             worker_hosts,
+                                             FLAGS.job_name,
+                                             FLAGS.task_index,
                                              FLAGS.margin,
                                              FLAGS.learning_rate,
                                              FLAGS.l1_norm,
@@ -250,7 +261,48 @@ def train_multi_thread():
             # for t in workers:
             #     t.join() # wait the threads to finish
 
+def train_dist():
+    data_mgr, model = create_model()
+    # Config to turn on JIT compilation
+    NUM_THREADS = 0 # let the system decides
+    config = tf.ConfigProto(allow_soft_placement=True, intra_op_parallelism_threads=NUM_THREADS, inter_op_parallelism_threads=NUM_THREADS)
+    config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
+    # The MonitoredTrainingSession takes care of session initialization,
+    # restoring from a checkpoint, saving to a checkpoint, and closing when done
+    # or an error occurs.
+    with tf.train.MonitoredTrainingSession(master=model.server.target,
+                                           is_chief=(model.task_index == 0),
+                                           checkpoint_dir=FLAGS.train_dir,
+                                           save_summaries_steps = None,
+                                           config=config#,
+                                           #hooks=hooks
+                                           ) as session:
+        # Run a training step asynchronously.
+        # See `tf.train.SyncReplicasOptimizer` for additional details on how to
+        # perform *synchronous* training.
+        # session.run handles AbortedError in case of preempted PS.
+        total_steps = FLAGS.epochs * data_mgr.steps_per_epoch
+        worker_num = len(worker_hosts)
+        total_steps = total_steps // worker_num
+
+        initial_step, = session.run([model.global_step])
+        last_time, last_step = time.time(), initial_step
+        for local_step in range(total_steps):
+            if session.should_stop():
+                break
+            inputs = data_mgr.get_batch_multi_thread() # it does not improve the performance
+            global_step = model.train_minibatch_multithread(session, inputs)
+            if global_step % 100 == 0:
+                now = time.time()
+                epoch = (global_step - initial_step) // data_mgr.steps_per_epoch
+                time_per_step = (now - last_time) / (global_step - last_step)
+                epoch_time = time_per_step * data_mgr.steps_per_epoch 
+                print ("epoch %d global_step %d epoch_time %.2f" % (epoch, global_step, epoch_time))
+                sys.stdout.flush()
+                last_step, last_time = global_step, now
+    
             
+
 
 def write_parameters_to_file(Mh, Mt, relations, entitys, epoch):
     """
@@ -299,64 +351,17 @@ def write_parameters_to_file(Mh, Mt, relations, entitys, epoch):
                 f.write('\n')
 
 
-def test_small_model():
-    relation_num = 2
-    entity_num = 4
-    embedding_size = 2
-    batch_size = 1
-    epoch_num = 10
-    lr = 0.001
-    margin = 4
-
-    rids = [0]
-    hids = [0]
-    tids = [1]
-    n_hids = [0]
-    n_tids = [2]
-    flag_heads = [False]
-    index_h = [[0,0,0], [0,1,1], [1,0,0], [1,1,1]]
-    index_t = [[0,0,0], [0,1,1], [1,0,0], [1,1,1]]
-    inputs = (rids, hids, tids, n_hids, n_tids, flag_heads)
-
-    model = transparse_model.TranSparseModel(
-                                             FLAGS.margin,
-                                             FLAGS.learning_rate,
-                                             FLAGS.l1_norm,
-                                             relation_num,
-                                             entity_num,
-                                             embedding_size,
-                                             batch_size,
-                                             None,
-                                             None,
-                                             index_h,
-                                             index_t
-                                             )
 
 
-    with tf.Session() as session:
-        print('*'*40)
-        if FLAGS.debug:
-            session = tf_debug.LocalCLIDebugWrapperSession(session)
-            session.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
-
-        session.run(tf.global_variables_initializer())
-
-        for epoch in range(epoch_num):
-            Mh_all, Mt_all, relations, entitys = model.get_matrix_and_embeddings(session)
-            write_parameters_to_file(Mh_all, Mt_all, relations, entitys, epoch)
-            _, batch_loss = model.train_minibatch(session, inputs)
-            print ("epoch %d loss %.2f" % (epoch, batch_loss))
 
 def main(_):
-    if FLAGS.test:
-        test_small_model()
-    # elif FLAGS.eval:
-    #     print('write_parameters_for_eval:')
-    #     write_parameters_for_eval()
-    elif FLAGS.mt:
-        train_multi_thread()
-    else:
-        train()
+    train_dist()
+    # if FLAGS.dist:
+        
+    # elif FLAGS.mt:
+    #     train_multi_thread()
+    # else:
+    #     train()
 
 if __name__ == "__main__":
     tf.app.run()
