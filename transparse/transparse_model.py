@@ -21,13 +21,15 @@ class TranSparseModel(object):
         server = tf.train.Server(cluster,
                            job_name=job_name,
                            task_index=task_index)
+        self.task_index = task_index
         
         if job_name == "ps":
             server.join()
         elif job_name == "worker":
+            # with tf.device("/job:worker/task:%d" % task_index):
             greedy = tf.contrib.training.GreedyLoadBalancingStrategy(len(ps_hosts), tf.contrib.training.byte_size_load_fn)
             with tf.device(tf.train.replica_device_setter(
-                # worker_device="/job:worker/task:%d" % task_index, 
+                worker_device="/job:worker/task:%d" % task_index, 
                 # merge_devices = False,
                 cluster=cluster, 
                 ps_strategy=greedy
@@ -38,14 +40,23 @@ class TranSparseModel(object):
                 with tf.control_dependencies([self.train_op]):
                     self.norm_op = self._norm()
                     with tf.control_dependencies([self.norm_op]):
-                        with tf.device("/job:worker/task:%d" % task_index):
                             self.norm_prjct_op = self._norm_projected_cxx()
+                            # print(self.Mh_all.device)       # /job:ps/task:0
+                            # print(self.Mt_all.device)       # /job:ps/task:1
+                            # print(self.relations.device)    # /job:ps/task:0
+                            # print(self.entitys.device)      # /job:ps/task:1
+                            # print(self.norm_prjct_op.device)# /job:ps/task:0
+                            # print(self.train_op.device)     # /job:ps/task:0
+                            # print(self.loss.device)         # /job:worker/task:0
+                            # print(self.global_step.device)  # /job:ps/task:0
+                            # print(self.norm_op.device)      # /job:worker/task:0
+                            # exit()
+
                         # print('-'*40)
                         # print(self.norm_prjct_op)
 
                 self.merged = tf.summary.merge_all()
                 self.server = server
-                self.task_index = task_index
                 
                 # self.saver = tf.train.Saver()
 
@@ -58,6 +69,7 @@ class TranSparseModel(object):
             # Mt is Sparse Transfer Matrix of tail for all relations
             # The shape of Mt is the same as Mh
             M_init = np.asarray([np.eye(e_sz) for _ in range(r_num)])
+            # with tf.device('/job:ps/task:0'):
             Mh_all = tf.Variable(M_init, dtype=tf.float32, name="Mh_all")
             Mt_all = tf.Variable(M_init, dtype=tf.float32, name="Mt_all")
             shape = [r_num, e_sz, e_sz]
@@ -81,12 +93,14 @@ class TranSparseModel(object):
             # relation_embeddings shape: r x m
             # entity_embeddings: shape: r x n
             if e_embed is None and r_embed is None:
+                # with tf.device('/job:ps/task:0'):
                 relations = tf.Variable(tf.truncated_normal([r_num, e_sz, 1]), name='relations')
                 entitys = tf.Variable(tf.truncated_normal([e_num, e_sz, 1]), name='entitys')
             else:
                 r_embed = tf.reshape(r_embed, [r_num, e_sz, 1])
-                relations = tf.Variable(r_embed, dtype=tf.float32, name='relations')
                 e_embed = tf.reshape(e_embed, [e_num, e_sz, 1])
+                # with tf.device('/job:ps/task:0'):
+                relations = tf.Variable(r_embed, dtype=tf.float32, name='relations')
                 entitys = tf.Variable(e_embed, dtype=tf.float32, name='entitys')
             self.relations = relations
             self.entitys = entitys
@@ -205,11 +219,15 @@ class TranSparseModel(object):
             with tf.control_dependencies([h_norm_op, t_norm_op, neg_norm_op, r_norm_op]):
                 return tf.no_op(name='norm_op')
 
+    
     def _norm_projected_cxx(self):
         '''
         Fast and high accuracy!
         '''
         (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
+
+        # g = tf.get_default_graph()
+        # with g.colocate_with(self.norm_op):
         return  norm_prjct_module.norm_prjct_op(self.Mh_all, 
                                                 self.Mt_all,
                                                 self.relations,
@@ -221,7 +239,17 @@ class TranSparseModel(object):
                                                 n_hids, n_tids, flag_heads
                                                 )
 
-    
+    def _norm_projected_cxx_v2(self):
+        '''
+        Fast and high accuracy!
+        '''
+        (rids, hids, tids, n_hids, n_tids, flag_heads) = self.inputs
+        _,h,t,neg_h,neg_t,Mh,Mt,mask_h,mask_t = self._embed_lookup(self.inputs)
+        n_ids = tf.where(flag_heads, n_hids, n_tids)
+        neg = tf.where(flag_heads, neg_h, neg_t)
+        ? = norm_prjct_module.norm_prjct_op_v2(Mh, Mt, h, t, neg_h, neg_t, flag_heads, mask_h, mask_t, lr)
+        return  ?
+
 
     def train_minibatch(self, session, inputs):
         rids, hids, tids, n_hids, n_tids, flag_heads = self.inputs

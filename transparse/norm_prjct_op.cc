@@ -34,4 +34,26 @@ REGISTER_OP("NormPrjctOp")
 Norm projected entities according to gradients.
 )doc");
 
+REGISTER_OP("NormPrjctOpV2")
+    .Input("mh: float")//Mh
+    .Input("mt: float")//Mt
+    .Input("h: float")
+    .Input("t: float")
+    .Input("neg_h: float")
+    .Input("neg_t: float")
+    .Input("flag_heads: bool")
+    .Input("mask_h: float")
+    .Input("mask_t: float")
+    .Input("lr: float")
+    .Output("dmh: float")
+    .Output("dmt: float")
+    .Output("dh: float")
+    .Output("dt: float")
+    .Output("dneg_h: float")
+    .Output("dneg_t: float")
+    .SetIsStateful()
+    .Doc(R"doc(
+Norm projected entities according to gradients.
+)doc");
+
 }  // end namespace tensorflow

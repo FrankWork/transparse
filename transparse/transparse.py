@@ -17,7 +17,7 @@ import transparse_model
 
 
 tf.app.flags.DEFINE_string("data_dir", "data/", "Data directory")
-tf.app.flags.DEFINE_string("train_dir", "output/", "Training directory.")
+tf.app.flags.DEFINE_string("train_dir", "/tmp", "Training directory.")
 tf.app.flags.DEFINE_float("learning_rate", 0.001, "Learning rate.")
 tf.app.flags.DEFINE_float("margin", 4, "Used in margin-based loss function.")
 tf.app.flags.DEFINE_integer("relation_num", 11,
@@ -46,8 +46,8 @@ tf.app.flags.DEFINE_boolean("mt", False,
                             "Set to True for multithreading training.")
 
 FLAGS = tf.app.flags.FLAGS
-# ps_hosts = ['localhost:8088','localhost:8188']
-ps_hosts = ['localhost:8088']
+ps_hosts = ['localhost:8088','localhost:8188']
+# ps_hosts = ['localhost:8088']
 worker_hosts = ['localhost:8288']
 
 # worker_hosts = ['localhost:8288','localhost:8388','localhost:8488']
@@ -281,6 +281,9 @@ def train_dist():
         # See `tf.train.SyncReplicasOptimizer` for additional details on how to
         # perform *synchronous* training.
         # session.run handles AbortedError in case of preempted PS.
+        for op in session.graph.get_operations():
+            print('%s\t%s' % (op.name, getattr(op, 'device', 'no device')))
+        exit()
         total_steps = FLAGS.epochs * data_mgr.steps_per_epoch
         worker_num = len(worker_hosts)
         total_steps = total_steps // worker_num

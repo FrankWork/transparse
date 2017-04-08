@@ -7,7 +7,9 @@ Training:
 $ TF_INC=$(python -c 'import tensorflow as tf; print(tf.sysconfig.get_include())')
 $ g++ -std=c++11 -shared norm_prjct_op.cc norm_prjct_kernel.cc -o \
        norm_prjct_op.so -fPIC -I $TF_INC -O2 -D_GLIBCXX_USE_CXX11_ABI=0
-$ python3 transparse.py # Train
+$ python3 transparse.py --job_name=ps --task_index=0
+$ python3 transparse.py --job_name=ps --task_index=1
+$ python3 transparse.py --job_name=worker --task_index=0
 $ python evaluate.py    # Evaluate
 ```
 
