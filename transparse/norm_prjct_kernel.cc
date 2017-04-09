@@ -249,7 +249,21 @@ class NormPrjctOpV2 : public OpKernel {
 
     const int64 batch_size = h.dim_size(0);
     float lambda = 2 * lr.scalar<float>()();
+
+    Tensor *dmh;//(DT_FLOAT, t_mh.shape());
+    Tensor *dmt;//(DT_FLOAT, t_mt.shape());
+    Tensor *dh;//(DT_FLOAT, t_h.shape());
+    Tensor *dt;//(DT_FLOAT, t_t.shape());
+    Tensor *dneg_h;//(DT_FLOAT, t_neg_h.shape());
+    Tensor *dneg_t;//(DT_FLOAT, t_neg_t.shape());
+    ctx->allocate_outpu(0, t_mh.shape(), &dmh);
+    ctx->allocate_outpu(1, t_mt.shape(), &dmt);
+    ctx->allocate_outpu(2, t_h.shape(), &dh);
+    ctx->allocate_outpu(3, t_t.shape(), &dt);
+    ctx->allocate_outpu(4, t_neg_h.shape(), &dneg_h);
+    ctx->allocate_outpu(5, t_neg_t.shape(), &dneg_t);
     
+
 
     for (int64 i = 0; i < batch_size; ++i){
       EigenTensor<float> Mh_chip = Tmh.chip(i, 0);
@@ -270,7 +284,6 @@ class NormPrjctOpV2 : public OpKernel {
       auto neg_t = EigenMatrixMap<float>(neg_t_chip.data(), neg_t_chip.dimension(0), neg_t_chip.dimension(1));
       auto mask_h = EigenMatrixMap<float>(mask_h_chip.data(), mask_h_chip.dimension(0), mask_h_chip.dimension(1));
       auto mask_t = EigenMatrixMap<float>(mask_t_chip.data(), mask_t_chip.dimension(0), mask_t_chip.dimension(1));
-
 
       while(true){
         EigenMatrix<float> h_p = Mh * h;
@@ -294,7 +307,16 @@ class NormPrjctOpV2 : public OpKernel {
           auto Mh_temp = Mh;
           auto Mt_temp = Mt;
 
+// Tensor dmh(DT_FLOAT, t_mh.shape());
+// Tensor dmt(DT_FLOAT, t_mt.shape());
+// Tensor dh(DT_FLOAT, t_h.shape());
+// Tensor dt(DT_FLOAT, t_t.shape());
+// Tensor dneg_h(DT_FLOAT, t_neg_h.shape());
+// Tensor dneg_t(DT_FLOAT, t_neg_t.shape());
+
+
           if (norm_h_p > 0.){
+
             Mh -= lambda * (h_p * h.transpose()).cwiseProduct(mask_h);
             h -= lambda * Mh_temp.transpose() * h_p;
            }
@@ -303,7 +325,7 @@ class NormPrjctOpV2 : public OpKernel {
           if (norm_t_p > 0.){
             Mt -= lambda * (t_p * t.transpose()).cwiseProduct(mask_t);
             t -= lambda * Mt_temp.transpose() * t_p;
-          }           
+          }
 
           if (norm_neg_p > 0.){
             if(flag_head){
@@ -343,7 +365,14 @@ class NormPrjctOpV2 : public OpKernel {
       }
       TMh_all.chip(rid, 0) = EigenTensorMap<float>(Mh.data(), Mh_chip.dimensions());
       TMt_all.chip(rid, 0) = EigenTensorMap<float>(Mt.data(), Mt_chip.dimensions());
-    }// for batch_size    
+    }// for batch_size
+    
+    // ctx->set_output(0, dmh);
+    // ctx->set_output(1, dmt);
+    // ctx->set_output(2, dh);
+    // ctx->set_output(3, dt);
+    // ctx->set_output(4, dneg_h);
+    // ctx->set_output(5, dneg_t);
   }
 
  private:
